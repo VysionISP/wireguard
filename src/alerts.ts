@@ -33,6 +33,17 @@ export class Alerter {
     private readonly tg: TelegramClient = realTelegram,
   ) {}
 
+  // Notification prefs: a dashboard-set value wins over the config.json default.
+  private get notifyOnRegisterPref(): boolean {
+    return this.settings?.general().notifyOnRegister ?? this.cfg.notifyOnRegister;
+  }
+  private get notifyOnlinePref(): boolean {
+    return this.settings?.general().notifyOnline ?? this.cfg.notifyOnline;
+  }
+  private get suppressMinutesPref(): number {
+    return this.settings?.general().suppressMinutes ?? this.cfg.suppressMinutes;
+  }
+
   get enabled(): boolean {
     const tg = this.settings?.telegram();
     const settingsTelegram = Boolean(tg?.botToken && tg.chats.length);
@@ -81,10 +92,10 @@ export class Alerter {
   /** Called by the monitor on every recorded transition. */
   async routerTransition(router: RouterRecord, online: boolean): Promise<void> {
     if (!this.enabled) return;
-    if (online && !this.cfg.notifyOnline) return;
+    if (online && !this.notifyOnlinePref) return;
     const key = `${router.serialNumber}:${online ? "online" : "offline"}`;
     const now = Date.now();
-    const windowMs = this.cfg.suppressMinutes * 60_000;
+    const windowMs = this.suppressMinutesPref * 60_000;
     if (windowMs > 0 && now - (this.lastSent.get(key) ?? 0) < windowMs) return;
     this.lastSent.set(key, now);
     const text = online
@@ -100,9 +111,9 @@ export class Alerter {
    */
   async custom(router: RouterRecord, text: string, event: AlertEvent, suppressKey?: string): Promise<void> {
     if (!this.enabled) return;
-    if (suppressKey && this.cfg.suppressMinutes > 0) {
+    if (suppressKey && this.suppressMinutesPref > 0) {
       const now = Date.now();
-      const windowMs = this.cfg.suppressMinutes * 60_000;
+      const windowMs = this.suppressMinutesPref * 60_000;
       if (now - (this.lastSent.get(suppressKey) ?? 0) < windowMs) return;
       this.lastSent.set(suppressKey, now);
     }
@@ -110,7 +121,7 @@ export class Alerter {
   }
 
   async routerRegistered(router: RouterRecord, rereg: boolean): Promise<void> {
-    if (!this.enabled || !this.cfg.notifyOnRegister) return;
+    if (!this.enabled || !this.notifyOnRegisterPref) return;
     const text = rereg
       ? `🔄 ${routerName(router)} re-registered (${router.boardName}, ROS ${router.rosVersion}) — ${router.tunnelIp}`
       : `🆕 New router registered: ${routerName(router)} (${router.boardName}, ROS ${router.rosVersion}) — ${router.tunnelIp}`;

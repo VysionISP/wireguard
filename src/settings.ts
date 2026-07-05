@@ -17,12 +17,23 @@ export interface TelegramSettings {
   chats: RouteChat[];
 }
 
+/** Notification preferences; null on a field means "use the config.json default". */
+export interface GeneralSettings {
+  notifyOnRegister: boolean | null;
+  notifyOnline: boolean | null;
+  suppressMinutes: number | null;
+}
+
 export interface Settings {
   telegram: TelegramSettings;
+  general: GeneralSettings;
 }
 
 function empty(): Settings {
-  return { telegram: { botToken: "", chats: [] } };
+  return {
+    telegram: { botToken: "", chats: [] },
+    general: { notifyOnRegister: null, notifyOnline: null, suppressMinutes: null },
+  };
 }
 
 /**
@@ -59,6 +70,15 @@ export class SettingsStore {
 
   setTelegram(botToken: string, chats: RouteChat[]): void {
     this.settings.telegram = { botToken, chats };
+    this.persist();
+  }
+
+  general(): GeneralSettings {
+    return this.settings.general ?? { notifyOnRegister: null, notifyOnline: null, suppressMinutes: null };
+  }
+
+  setGeneral(g: GeneralSettings): void {
+    this.settings.general = g;
     this.persist();
   }
 }

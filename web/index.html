@@ -98,6 +98,16 @@
   nav.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); background: #0c141b; }
   .adminOnly.hidden { display: none; }
 
+  /* settings sub-navigation */
+  nav.subtabs { display: flex; gap: 2px; margin: 4px 0 18px; flex-wrap: wrap; }
+  nav.subtabs button {
+    background: var(--panel); border: 1px solid var(--border); border-bottom: none; border-radius: 4px 4px 0 0;
+    padding: 8px 16px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    font-family: var(--mono); border-radius: 4px;
+  }
+  nav.subtabs button:hover { color: var(--text); border-color: var(--border2); }
+  nav.subtabs button.active { color: var(--accent); border-color: var(--accent-dim); background: #0c141b; }
+
   /* ---- readout tiles ---- */
   .cards { display: flex; gap: 10px; margin: 20px 0; flex-wrap: wrap; }
   .card {
@@ -355,8 +365,6 @@
     <button data-tab="fleet">Fleet</button>
     <button data-tab="events">Events</button>
     <button data-tab="bulk" class="adminOnly">Bulk actions</button>
-    <button data-tab="tokens" class="adminOnly">Bootstrap tokens</button>
-    <button data-tab="users" class="adminOnly">Users</button>
     <button data-tab="settings" class="adminOnly">Settings</button>
     <button data-tab="audit" class="adminOnly">Audit log</button>
   </nav>
@@ -470,81 +478,111 @@
     </div>
   </section>
 
-  <!-- TOKENS -->
-  <section id="tab-tokens" class="hidden">
-    <div class="panel">
-      <h2>Issue a one-time bootstrap token</h2>
-      <div class="pad row2">
-        <div class="field" style="flex:1;min-width:200px"><label>Note (who / what it's for)</label><input id="tkNote" placeholder="Smith install — truck 3"></div>
-        <div class="field"><label>Valid for (hours)</label><input id="tkTtl" type="number" value="72" style="width:100px"></div>
-        <button class="primary" id="tkBtn" style="align-self:flex-end">Generate</button>
-      </div>
-      <div class="pad chips" style="padding-top:0">Each token registers exactly one router, then burns. Use these instead of the shared token so a leaked script can't onboard rogue devices.</div>
-    </div>
-    <div class="panel">
-      <h2>Tokens</h2>
-      <div class="tablewrap">
-        <table>
-          <thead><tr><th>Note</th><th>Status</th><th>Created by</th><th>Expires</th><th>Used by</th><th></th></tr></thead>
-          <tbody id="tokenRows"></tbody>
-        </table>
-        <div class="empty hidden" id="tokenEmpty">No tokens yet.</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- USERS -->
-  <section id="tab-users" class="hidden">
-    <div class="panel">
-      <h2>Add a dashboard user</h2>
-      <div class="pad row2">
-        <div class="field"><label>Username</label><input id="usName" placeholder="tech1"></div>
-        <div class="field"><label>Password (blank = generate)</label><input id="usPass" type="text" placeholder="min 8 chars"></div>
-        <div class="field"><label>Role</label><select id="usRole"><option value="tech">tech</option><option value="admin">admin</option></select></div>
-        <button class="primary" id="usBtn" style="align-self:flex-end">Add</button>
-      </div>
-      <div class="pad chips" style="padding-top:0"><b>tech</b> = view, verify, live stats, backups. <b>admin</b> = everything (revoke, bulk, tokens, users, restore).</div>
-    </div>
-    <div class="panel">
-      <h2>Users</h2>
-      <div class="tablewrap">
-        <table>
-          <thead><tr><th>Username</th><th>Role</th><th>Created</th><th></th></tr></thead>
-          <tbody id="userRows"></tbody>
-        </table>
-        <div class="empty hidden" id="userEmpty">No named users yet — only the admin token can sign in.</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- SETTINGS -->
+  <!-- SETTINGS (hub) -->
   <section id="tab-settings" class="hidden">
-    <div class="panel">
-      <h2>Telegram notifications</h2>
-      <div class="pad">
-        <div class="field" style="max-width:520px">
-          <label>Bot token <span class="chips">(from @BotFather)</span></label>
-          <input id="tgToken" type="password" placeholder="123456789:AА…" autocomplete="off">
+    <nav class="subtabs">
+      <button data-sub="general" class="active">General</button>
+      <button data-sub="users">Users</button>
+      <button data-sub="tokens">Bootstrap tokens</button>
+      <button data-sub="notify">Notifications</button>
+    </nav>
+
+    <!-- GENERAL -->
+    <div class="subsec" id="set-general">
+      <div class="panel">
+        <h2>Notification preferences</h2>
+        <div class="pad">
+          <div class="montoggles" style="max-width:560px">
+            <label><input type="checkbox" id="gNotifyReg"> Notify when a router registers / re-registers</label>
+            <label><input type="checkbox" id="gNotifyOnline"> Notify when a router comes back online (not just when it drops)</label>
+            <div class="r"><span class="chips">Flap suppression window</span>
+              <input id="gSuppress" type="number" min="0" max="1440" style="width:90px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px;font-family:var(--mono)"> <span class="chips">minutes — max one offline + one online alert per router per window</span></div>
+            <div><button class="primary" id="gSave">Save preferences</button></div>
+          </div>
         </div>
-        <div class="row2" style="margin:10px 0">
-          <button class="primary" id="tgVerify">Verify &amp; fetch chats</button>
-          <span class="chips" id="tgStatus"></span>
-        </div>
-        <div class="chips" style="max-width:640px">Add the bot to your group/channel (as an admin for channels), then send a message there — it must have at least one recent update for the bot to see the chat. Click Verify to pull the list.</div>
+      </div>
+      <div class="panel">
+        <h2>Monitoring</h2>
+        <div class="pad chips" id="genMonInfo">…</div>
       </div>
     </div>
-    <div class="panel" id="tgChatsPanel">
-      <h2>Route notifications to chats</h2>
-      <div class="tablewrap">
-        <table>
-          <thead><tr><th>Use</th><th>Chat</th><th>Type</th><th>New device</th><th>Offline</th><th>Online</th><th>Login</th><th>Link</th><th></th></tr></thead>
-          <tbody id="tgChatRows"></tbody>
-        </table>
-        <div class="empty" id="tgChatEmpty">Verify a bot token above to list chats, or your saved chats will appear here.</div>
+
+    <!-- USERS -->
+    <div class="subsec hidden" id="set-users">
+      <div class="panel">
+        <h2>Add a dashboard user</h2>
+        <div class="pad row2">
+          <div class="field"><label>Username</label><input id="usName" placeholder="tech1"></div>
+          <div class="field"><label>Password (blank = generate)</label><input id="usPass" type="text" placeholder="min 8 chars"></div>
+          <div class="field"><label>Role</label><select id="usRole"><option value="tech">tech</option><option value="admin">admin</option></select></div>
+          <button class="primary" id="usBtn" style="align-self:flex-end">Add</button>
+        </div>
+        <div class="pad chips" style="padding-top:0"><b>tech</b> = view, verify, live stats, backups. <b>admin</b> = everything (revoke, bulk, tokens, users, restore).</div>
       </div>
-      <div class="pad row2">
-        <button class="primary" id="tgSave">Save routing</button>
-        <span class="chips">Tick a category per chat to send those notifications there. Use the row toggle to include/exclude a chat entirely.</span>
+      <div class="panel">
+        <h2>Users</h2>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Username</th><th>Role</th><th>Created</th><th></th></tr></thead>
+            <tbody id="userRows"></tbody>
+          </table>
+          <div class="empty hidden" id="userEmpty">No named users yet — only the admin token can sign in.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BOOTSTRAP TOKENS -->
+    <div class="subsec hidden" id="set-tokens">
+      <div class="panel">
+        <h2>Issue a one-time bootstrap token</h2>
+        <div class="pad row2">
+          <div class="field" style="flex:1;min-width:200px"><label>Note (who / what it's for)</label><input id="tkNote" placeholder="Smith install — truck 3"></div>
+          <div class="field"><label>Valid for (hours)</label><input id="tkTtl" type="number" value="72" style="width:100px"></div>
+          <button class="primary" id="tkBtn" style="align-self:flex-end">Generate</button>
+        </div>
+        <div class="pad chips" style="padding-top:0">Each token registers exactly one router, then burns. Use these instead of the shared token so a leaked script can't onboard rogue devices.</div>
+      </div>
+      <div class="panel">
+        <h2>Tokens</h2>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Note</th><th>Status</th><th>Created by</th><th>Expires</th><th>Used by</th><th></th></tr></thead>
+            <tbody id="tokenRows"></tbody>
+          </table>
+          <div class="empty hidden" id="tokenEmpty">No tokens yet.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NOTIFICATIONS (Telegram) -->
+    <div class="subsec hidden" id="set-notify">
+      <div class="panel">
+        <h2>Telegram notifications</h2>
+        <div class="pad">
+          <div class="field" style="max-width:520px">
+            <label>Bot token <span class="chips">(from @BotFather)</span></label>
+            <input id="tgToken" type="password" placeholder="123456789:AА…" autocomplete="off">
+          </div>
+          <div class="row2" style="margin:10px 0">
+            <button class="primary" id="tgVerify">Verify &amp; fetch chats</button>
+            <span class="chips" id="tgStatus"></span>
+          </div>
+          <div class="chips" style="max-width:640px">Add the bot to your group/channel (as an admin for channels), then send a message there — it must have at least one recent update for the bot to see the chat. Click Verify to pull the list.</div>
+        </div>
+      </div>
+      <div class="panel" id="tgChatsPanel">
+        <h2>Route notifications to chats</h2>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Use</th><th>Chat</th><th>Type</th><th>New device</th><th>Offline</th><th>Online</th><th>Login</th><th>Link</th><th></th></tr></thead>
+            <tbody id="tgChatRows"></tbody>
+          </table>
+          <div class="empty" id="tgChatEmpty">Verify a bot token above to list chats, or your saved chats will appear here.</div>
+        </div>
+        <div class="pad row2">
+          <button class="primary" id="tgSave">Save routing</button>
+          <span class="chips">Tick a category per chat to send those notifications there. Use the row toggle to include/exclude a chat entirely.</span>
+        </div>
       </div>
     </div>
   </section>
@@ -648,11 +686,42 @@ function showTab(name) {
   if (name === "status") loadStatus();
   if (name === "events") loadEvents();
   if (name === "fleet") load();
-  if (name === "tokens") loadTokens();
-  if (name === "users") loadUsers();
   if (name === "audit") loadAudit();
-  if (name === "settings") loadSettings();
+  if (name === "settings") showSubTab(currentSub);
   if (name === "bulk") updateBulkInfo();
+}
+
+/* ---------------- settings sub-tabs ---------------- */
+let currentSub = "general";
+function showSubTab(sub) {
+  currentSub = sub;
+  for (const s of document.querySelectorAll("#tab-settings .subsec")) s.classList.add("hidden");
+  $("set-" + sub)?.classList.remove("hidden");
+  for (const b of document.querySelectorAll("nav.subtabs button")) b.classList.toggle("active", b.dataset.sub === sub);
+  if (sub === "general") loadGeneral();
+  if (sub === "users") loadUsers();
+  if (sub === "tokens") loadTokens();
+  if (sub === "notify") loadSettings();
+}
+async function loadGeneral() {
+  const s = await api("/api/settings");
+  $("gNotifyReg").checked = !!s.general.notifyOnRegister;
+  $("gNotifyOnline").checked = !!s.general.notifyOnline;
+  $("gSuppress").value = s.general.suppressMinutes;
+  $("genMonInfo").innerHTML = `Device monitor polls every <b>${s.monitor.intervalSeconds}s</b> for logins &amp; link state. A router is marked offline after <b>${s.monitor.offlineAfterSeconds}s</b> without a WireGuard handshake. These are set in <span class="mono">config.json</span> (restart to change).`;
+}
+async function saveGeneral() {
+  try {
+    await api("/api/settings/general", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        notifyOnRegister: $("gNotifyReg").checked,
+        notifyOnline: $("gNotifyOnline").checked,
+        suppressMinutes: Number($("gSuppress").value) || 0,
+      }),
+    });
+    toast("Preferences saved");
+  } catch (e) { toast(e.message); }
 }
 function curTab() {
   const b = document.querySelector("nav.tabs button.active");
@@ -1455,6 +1524,8 @@ $("bulkRun").addEventListener("click", runBulk);
 $("tkBtn").addEventListener("click", () => createToken().catch((e) => toast(e.message)));
 $("usBtn").addEventListener("click", addUser);
 $("auditReload").addEventListener("click", () => loadAudit().catch((e) => toast(e.message)));
+for (const b of document.querySelectorAll("nav.subtabs button")) b.addEventListener("click", () => showSubTab(b.dataset.sub));
+$("gSave").addEventListener("click", saveGeneral);
 $("tgVerify").addEventListener("click", verifyTelegram);
 $("tgSave").addEventListener("click", saveTelegram);
 $("tgChatRows").addEventListener("change", (e) => {

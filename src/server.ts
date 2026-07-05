@@ -687,6 +687,7 @@ export function buildApp(deps: AppDeps): Express {
   // ---- settings (Telegram notifications)
   app.get("/api/settings", requireAdmin, (_req: Request, res: Response) => {
     const tg = settings.telegram();
+    const g = settings.general();
     // Never return the raw token; just whether one is set and a hint.
     res.json({
       telegram: {
@@ -694,8 +695,35 @@ export function buildApp(deps: AppDeps): Express {
         tokenHint: tg.botToken ? tg.botToken.slice(0, 8) + "…" : "",
         chats: tg.chats,
       },
+      general: {
+        // Effective values (dashboard override, else config default).
+        notifyOnRegister: g.notifyOnRegister ?? config.alerts.notifyOnRegister,
+        notifyOnline: g.notifyOnline ?? config.alerts.notifyOnline,
+        suppressMinutes: g.suppressMinutes ?? config.alerts.suppressMinutes,
+      },
+      monitor: {
+        intervalSeconds: config.deviceMonitor.intervalSeconds,
+        offlineAfterSeconds: config.monitor.offlineAfterSeconds,
+      },
       routeKeys: ROUTE_KEYS,
     });
+  });
+
+  app.post("/api/settings/general", requireAdmin, (req: Request, res: Response) => {
+    const parsed = z
+      .object({
+        notifyOnRegister: z.boolean(),
+        notifyOnline: z.boolean(),
+        suppressMinutes: z.number().int().min(0).max(1440),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid settings" });
+      return;
+    }
+    settings.setGeneral(parsed.data);
+    audit.log(who(req), "settings.general", `suppress=${parsed.data.suppressMinutes}m`);
+    res.json({ ok: true });
   });
 
   // Validate a bot token and list the chats it can reach.

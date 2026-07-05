@@ -79,9 +79,31 @@ describe("settings API", () => {
     expect(sent.at(-1)).toMatchObject({ chatId: "555" });
   });
 
+  it("saves general notification preferences and reflects them", async () => {
+    await request(app).post("/api/settings/general").set("authorization", A())
+      .send({ notifyOnRegister: false, notifyOnline: true, suppressMinutes: 5 }).expect(200);
+    const g = await request(app).get("/api/settings").set("authorization", A());
+    expect(g.body.general).toMatchObject({ notifyOnRegister: false, notifyOnline: true, suppressMinutes: 5 });
+    expect(g.body.monitor.intervalSeconds).toBeGreaterThan(0);
+  });
+
+  it("general prefs override the config default in the Alerter", async () => {
+    settings.setGeneral({ notifyOnRegister: false, notifyOnline: null, suppressMinutes: null });
+    const seen: string[] = [];
+    const alerter = new (await import("../src/alerts.js")).Alerter(
+      { notifyOnRegister: true, notifyOnline: true, suppressMinutes: 0 } as any,
+      async (t: string) => { seen.push(t); }, settings,
+    );
+    const now = new Date().toISOString();
+    const r: any = { serialNumber: "S", identity: "x", boardName: "b", rosVersion: "7", tunnelIp: "10.0.0.2", label: "L" };
+    await alerter.routerRegistered(r, false); // pref says false → no alert even though config says true
+    expect(seen).toHaveLength(0);
+  });
+
   it("all settings endpoints are admin-only", async () => {
     expect((await request(app).get("/api/settings")).status).toBe(401);
     expect((await request(app).post("/api/settings/telegram").send({})).status).toBe(401);
+    expect((await request(app).post("/api/settings/general").send({})).status).toBe(401);
   });
 });
 
