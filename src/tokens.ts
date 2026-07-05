@@ -10,6 +10,10 @@ export interface OneTimeToken {
   expiresAt: string | null;
   usedAt: string | null;
   usedBySerial: string | null;
+  /** When set, a device registering with this token joins this customer. */
+  customer?: string;
+  /** When set, the device is given this label on registration. */
+  label?: string;
 }
 
 /**
@@ -32,7 +36,12 @@ export class TokenStore {
     fs.renameSync(tmp, this.filePath);
   }
 
-  create(note: string, createdBy: string, ttlHours: number | null): OneTimeToken {
+  create(
+    note: string,
+    createdBy: string,
+    ttlHours: number | null,
+    opts: { customer?: string; label?: string } = {},
+  ): OneTimeToken {
     const t: OneTimeToken = {
       token: "ot-" + crypto.randomBytes(20).toString("hex"),
       note,
@@ -41,6 +50,8 @@ export class TokenStore {
       expiresAt: ttlHours ? new Date(Date.now() + ttlHours * 3600_000).toISOString() : null,
       usedAt: null,
       usedBySerial: null,
+      customer: opts.customer || undefined,
+      label: opts.label || undefined,
     };
     this.tokens.push(t);
     this.persist();

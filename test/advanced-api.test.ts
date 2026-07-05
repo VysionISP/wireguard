@@ -126,6 +126,18 @@ describe("one-time tokens", () => {
     expect(res.status).toBe(400);
   });
 
+  it("a token carrying a customer + label assigns them on bootstrap", async () => {
+    const t = await req("post", "/api/tokens").send({ note: "Smith install", customer: "Smith — Ballarat", label: "Main router" });
+    const reg = await register("SMITH-RB1", 11, t.body.token);
+    expect(reg.status).toBe(200);
+    const r = store.findBySerial("SMITH-RB1")!;
+    expect(r.customerGroup).toBe("Smith — Ballarat");
+    expect(r.label).toBe("Main router");
+    // token records the customer for the listing
+    const list = await req("get", "/api/tokens");
+    expect(list.body[0].customer).toBe("Smith — Ballarat");
+  });
+
   it("disabling the master token blocks it but one-time still works", async () => {
     cfg.auth.allowMasterProvisioningToken = false;
     app = build();

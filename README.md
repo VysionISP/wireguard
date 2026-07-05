@@ -150,7 +150,10 @@ alerter fans each event out to the subscribed chats. This is layered on top of
 The shared `provisioningToken` lives in every bootstrap script, so a leaked
 script can onboard rogue routers indefinitely. One-time tokens close that:
 generate one per install from the Tokens tab or `mtprov token "note"`, and it
-registers exactly one router before burning. Set
+registers exactly one router before burning. A token can carry a **customer**
+and **label**: set them when generating the token, and the device is
+automatically assigned to that customer (and labelled) the moment it bootstraps
+with that token — so a whole install is one-and-done from the script. Set
 `auth.allowMasterProvisioningToken: false` to refuse the shared token
 entirely and require one-time tokens for every onboard.
 

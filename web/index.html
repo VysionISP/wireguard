@@ -614,18 +614,24 @@
     <div class="subsec hidden" id="set-tokens">
       <div class="panel">
         <h2>Issue a one-time bootstrap token</h2>
-        <div class="pad row2">
-          <div class="field" style="flex:1;min-width:200px"><label>Note (who / what it's for)</label><input id="tkNote" placeholder="Smith install — truck 3"></div>
-          <div class="field"><label>Valid for (hours)</label><input id="tkTtl" type="number" value="72" style="width:100px"></div>
-          <button class="primary" id="tkBtn" style="align-self:flex-end">Generate</button>
+        <div class="pad">
+          <div class="row2">
+            <div class="field"><label>Customer <span class="chips">(device joins this customer on bootstrap)</span></label><input id="tkCustomer" list="tkCustList" placeholder="pick or type a customer"><datalist id="tkCustList"></datalist></div>
+            <div class="field" style="flex:1;min-width:180px"><label>Device label (optional)</label><input id="tkLabel" placeholder="e.g. Main router"></div>
+          </div>
+          <div class="row2" style="margin-top:8px">
+            <div class="field" style="flex:1;min-width:200px"><label>Note (who / what it's for)</label><input id="tkNote" placeholder="Smith install — truck 3"></div>
+            <div class="field"><label>Valid for (hours)</label><input id="tkTtl" type="number" value="72" style="width:100px"></div>
+            <button class="primary" id="tkBtn" style="align-self:flex-end">Generate</button>
+          </div>
         </div>
-        <div class="pad chips" style="padding-top:0">Each token registers exactly one router, then burns. Use these instead of the shared token so a leaked script can't onboard rogue devices.</div>
+        <div class="pad chips" style="padding-top:0">Each token registers exactly one router, then burns. When a customer is set, the device is automatically assigned to that customer the moment it bootstraps with this token.</div>
       </div>
       <div class="panel">
         <h2>Tokens</h2>
         <div class="tablewrap">
           <table>
-            <thead><tr><th>Note</th><th>Status</th><th>Created by</th><th>Expires</th><th>Used by</th><th></th></tr></thead>
+            <thead><tr><th>Customer</th><th>Note</th><th>Status</th><th>Expires</th><th>Used by</th><th></th></tr></thead>
             <tbody id="tokenRows"></tbody>
           </table>
           <div class="empty hidden" id="tokenEmpty">No tokens yet.</div>
@@ -1554,14 +1560,16 @@ async function runBulk() {
 
 /* ---------------- tokens ---------------- */
 async function loadTokens() {
-  const list = await api("/api/tokens");
+  const [list, custs] = await Promise.all([api("/api/tokens"), api("/api/customers").catch(() => [])]);
+  const dl = $("tkCustList");
+  if (dl) dl.innerHTML = custs.map((c) => `<option value="${esc(c.name)}"></option>`).join("");
   $("tokenEmpty").classList.toggle("hidden", list.length > 0);
   $("tokenRows").innerHTML = list.map((t) => {
     const status = t.usedAt ? "used" : (t.expiresAt && Date.parse(t.expiresAt) < Date.now()) ? "expired" : "active";
     return `<tr>
+      <td>${t.customer ? esc(t.customer) : '<span style="color:var(--muted)">—</span>'}</td>
       <td>${esc(t.note || "—")}</td>
       <td><span class="pill ${status === "active" ? "verified" : status === "used" ? "confirmed" : "revoked"}">${status}</span></td>
-      <td>${esc(t.createdBy)}</td>
       <td>${t.expiresAt ? fmtDate(t.expiresAt) : "never"}</td>
       <td class="mono">${t.usedBySerial ? esc(t.usedBySerial) : "—"}</td>
       <td class="actions">
@@ -1573,17 +1581,20 @@ async function loadTokens() {
 async function createToken() {
   const note = $("tkNote").value.trim();
   const ttlHours = Number($("tkTtl").value) || 72;
+  const customer = $("tkCustomer").value.trim();
+  const label = $("tkLabel").value.trim();
   const t = await api("/api/tokens", {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ note, ttlHours }),
+    body: JSON.stringify({ note, ttlHours, customer, label }),
   });
-  $("tkNote").value = "";
+  $("tkNote").value = ""; $("tkCustomer").value = ""; $("tkLabel").value = "";
   $("mTitle").textContent = "One-time bootstrap token";
   $("mBody").innerHTML = `
     <p>Run this on the fresh router — it works once, then burns:</p>
     <div class="boot" style="padding:0"><code class="mono" id="newTk">${esc(t.oneLiner)}</code>
     <button data-copy="${esc(t.oneLiner)}">Copy</button></div>
-    <p class="chips" style="margin-top:10px">Expires ${t.expiresAt ? fmtDate(t.expiresAt) : "never"}.</p>`;
+    ${t.customer ? `<p class="chips" style="margin-top:10px">On bootstrap the device joins customer <b>${esc(t.customer)}</b>${t.label ? ` and is labelled "${esc(t.label)}"` : ""}.</p>` : ""}
+    <p class="chips" style="margin-top:6px">Expires ${t.expiresAt ? fmtDate(t.expiresAt) : "never"}.</p>`;
   $("modal").showModal();
   loadTokens();
 }

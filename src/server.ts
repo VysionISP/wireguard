@@ -174,6 +174,8 @@ export function buildApp(deps: AppDeps): Express {
       res.status(401).json({ error: "invalid provisioning token" });
       return;
     }
+    // A one-time token may carry a customer + label to apply at onboarding.
+    const otToken = tokenKind === "one-time" ? tokens.find(body.token) : undefined;
 
     const now = new Date().toISOString();
     let router = store.findBySerial(body.serialNumber);
@@ -235,6 +237,8 @@ export function buildApp(deps: AppDeps): Express {
           updatedAt: now,
           lastSeenAt: now,
           deviceType: "customer",
+          customerGroup: otToken?.customer || undefined,
+          label: otToken?.label || undefined,
           monitoring: config.deviceMonitor.enableNewByDefault
             ? defaultMonitoring("customer", config.deviceMonitor.defaultAlertOnLogin, config.deviceMonitor.defaultAlertOnLinkDown)
             : undefined,
@@ -625,14 +629,19 @@ export function buildApp(deps: AppDeps): Express {
       .object({
         note: z.string().max(200).default(""),
         ttlHours: z.number().int().min(1).max(24 * 365).nullable().default(72),
+        customer: z.string().max(80).optional(),
+        label: z.string().max(120).optional(),
       })
       .safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: "invalid request" });
       return;
     }
-    const t = tokens.create(parsed.data.note, who(req), parsed.data.ttlHours);
-    audit.log(who(req), "token.create", t.note || t.token.slice(0, 12));
+    const t = tokens.create(parsed.data.note, who(req), parsed.data.ttlHours, {
+      customer: parsed.data.customer?.trim(),
+      label: parsed.data.label?.trim(),
+    });
+    audit.log(who(req), "token.create", t.customer || t.note || t.token.slice(0, 12));
     res.json({ ...t, oneLiner: renderOneLiner(config, t.token) });
   });
 
