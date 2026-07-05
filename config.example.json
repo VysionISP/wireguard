@@ -51,7 +51,7 @@
   },
   "deviceMonitor": {
     "enabled": true,
-    "intervalSeconds": 120,
+    "intervalSeconds": 30,
     "enableNewByDefault": true,
     "defaultAlertOnLogin": true,
     "defaultAlertOnLinkDown": true

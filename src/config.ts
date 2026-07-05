@@ -116,7 +116,7 @@ const configSchema = z.object({
   deviceMonitor: z
     .object({
       enabled: z.boolean().default(true),
-      intervalSeconds: z.number().int().min(30).default(120),
+      intervalSeconds: z.number().int().min(15).default(30),
       /** New routers get monitoring on by default with the flags below. */
       enableNewByDefault: z.boolean().default(true),
       defaultAlertOnLogin: z.boolean().default(true),
