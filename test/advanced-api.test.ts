@@ -27,6 +27,10 @@ const sshRun = async (_h: string, _u: string, _p: string, command: string) => ({
   output: `ran: ${command}`,
 });
 const sftpPut = async () => {};
+const fetchIfaces = async () => [
+  { name: "ether1", type: "ether", running: true, disabled: false },
+  { name: "sfp1", type: "sfp", running: false, disabled: false },
+];
 const fetchLive = async () => ({
   at: 0,
   resource: { uptime: "1d", version: "7.15", cpuLoad: 5, freeMemory: 100, totalMemory: 256, boardName: "Chateau" },
@@ -35,7 +39,7 @@ const fetchLive = async () => ({
 });
 
 function build() {
-  return buildApp({ config: cfg, store, wg: new DryRunManager("wg0", true), tokens, users, sessions, sshRun, fetchLive, sftpPut,
+  return buildApp({ config: cfg, store, wg: new DryRunManager("wg0", true), tokens, users, sessions, sshRun, fetchLive, fetchIfaces, sftpPut,
     issues: issuesStore, events: eventsStore,
     backups: new BackupStore(path.join(tempDir(), "b"), 5) });
 }
@@ -92,6 +96,34 @@ describe("one-time tokens", () => {
     // token now shows used
     const list = await req("get", "/api/tokens");
     expect(list.body[0].usedBySerial).toBe("HEXA");
+  });
+
+  it("concurrent registrations get distinct IPs and the token burns once", async () => {
+    const t = await req("post", "/api/tokens").send({ note: "race" });
+    const tok = t.body.token;
+    // Two devices phone home with the SAME one-time token at the same instant.
+    const [a, b] = await Promise.all([register("RACE-A", 21, tok), register("RACE-B", 22, tok)]);
+    const statuses = [a.status, b.status].sort();
+    // Exactly one succeeds; the other is rejected (token already burned).
+    expect(statuses).toEqual([200, 401]);
+    expect(store.list().filter((r) => r.serialNumber.startsWith("RACE")).length).toBe(1);
+  });
+
+  it("concurrent new registrations never collide on a tunnel IP", async () => {
+    await Promise.all(
+      Array.from({ length: 8 }, (_, i) => register(`BULK-${i}`, 30 + i)),
+    );
+    const ips = store.list().filter((r) => r.serialNumber.startsWith("BULK")).map((r) => r.tunnelIp);
+    expect(new Set(ips).size).toBe(ips.length); // all distinct
+  });
+
+  it("rejects malformed serial numbers at registration", async () => {
+    const res = await request(app).post("/api/register").send({
+      token: cfg.auth.provisioningToken,
+      publicKey: fakeKey(1),
+      serialNumber: "bad serial\n/system reset",
+    });
+    expect(res.status).toBe(400);
   });
 
   it("disabling the master token blocks it but one-time still works", async () => {
@@ -261,6 +293,15 @@ describe("status board: issues, events, monitoring settings", () => {
     expect((await req("get", "/api/events")).body.length).toBeGreaterThan(0);
     const per = await req("get", "/api/routers/MON4/events");
     expect(per.body.some((e: any) => e.type === "login")).toBe(true);
+  });
+
+  it("returns interfaces for the port map with the watched list", async () => {
+    await register("PORTS1", 7);
+    await req("patch", "/api/routers/PORTS1/monitoring").send({ watchInterfaces: ["ether1"] });
+    const res = await req("get", "/api/routers/PORTS1/interfaces");
+    expect(res.status).toBe(200);
+    expect(res.body.interfaces.map((i: any) => i.name)).toEqual(["ether1", "sfp1"]);
+    expect(res.body.watched).toEqual(["ether1"]);
   });
 
   it("monitoring PATCH is admin-only", async () => {

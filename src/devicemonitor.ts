@@ -12,7 +12,7 @@ import {
   type LogEntry,
 } from "./routeros.js";
 
-const MAX_SEEN_LOGINS = 60;
+const MAX_SEEN_LOGINS = 500;
 const AUTO_WATCH_TYPES = new Set(["ether", "sfp", "sfp-plus", "wlan", "lte"]);
 
 export interface DeviceMonitorDeps {
@@ -100,12 +100,17 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
           if (!iface.running) {
             const msg = `Port ${iface.name} link went DOWN`;
             events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "link-down", severity: "warning", message: msg });
-            issues.open(router.serialNumber, labelOf(router), "link-down", "warning", msg);
+            issues.open(router.serialNumber, labelOf(router), "link-down", "warning", msg, iface.name);
             alerter.custom(router, `🟠 ${labelOf(router)}: ${msg}`, "link-down", `linkdown:${router.serialNumber}:${iface.name}`).catch(() => {});
           } else {
-            events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "link-up", severity: "info", message: `Port ${iface.name} link restored` });
-            issues.resolve(router.serialNumber, "link-down");
-            alerter.custom(router, `🟢 ${labelOf(router)}: port ${iface.name} link restored`, "link-up").catch(() => {});
+            // Only announce recovery if we'd actually opened an issue for this
+            // port — avoids a spurious "restored" when a port that was down at
+            // baseline simply comes up.
+            const hadIssue = issues.resolve(router.serialNumber, "link-down", iface.name);
+            if (hadIssue) {
+              events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "link-up", severity: "info", message: `Port ${iface.name} link restored` });
+              alerter.custom(router, `🟢 ${labelOf(router)}: port ${iface.name} link restored`, "link-up").catch(() => {});
+            }
           }
         }
       }
@@ -114,27 +119,25 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
     // ---- logins
     if (mon.alertOnLogin) {
       const log = await fetchLog(router.tunnelIp, router.username, router.password);
-      const seen = new Set(state.seenLogins);
-      const fresh: { key: string; summary: string }[] = [];
+      const prevSeen = new Set(state.seenLogins);
+      // Every login currently in the router's memory log. This IS the source
+      // of truth: an entry can't reappear once the ring buffer rotates it out,
+      // so we set (not accumulate+truncate) — which fixes false re-alerts when
+      // the log holds more login lines than the old cap.
+      const current: { key: string; summary: string }[] = [];
       for (const entry of log) {
         const info = loginInfo(entry);
-        if (info && !seen.has(info.key)) fresh.push(info);
+        if (info) current.push(info);
       }
-      if (!state.initialised) {
-        // First poll: record everything as already-seen so we don't alert on history.
-        for (const entry of log) {
-          const info = loginInfo(entry);
-          if (info) seen.add(info.key);
-        }
-      } else {
-        for (const f of fresh) {
-          seen.add(f.key);
-          events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "login", severity: "info", message: f.summary });
-          alerter.custom(router, `🔑 ${labelOf(router)}: ${f.summary}`, "login").catch(() => {});
+      if (state.initialised) {
+        for (const c of current) {
+          if (prevSeen.has(c.key)) continue;
+          events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "login", severity: "info", message: c.summary });
+          alerter.custom(router, `🔑 ${labelOf(router)}: ${c.summary}`, "login").catch(() => {});
         }
       }
-      const merged = [...seen].slice(-MAX_SEEN_LOGINS);
-      state.seenLogins = merged;
+      // Keep a generous bound; RouterOS memory logs are far smaller than this.
+      state.seenLogins = current.map((c) => c.key).slice(-MAX_SEEN_LOGINS);
       dirty = true;
     }
 

@@ -25,16 +25,34 @@ export interface DeviceEvent {
  * The router's own record links to these; the status board shows the global
  * stream. Kept simple and durable — one line per event.
  */
+const MAX_EVENTS = 5000;
+
 export class EventLog {
+  private sinceTrim = 0;
+
   constructor(private readonly filePath: string) {}
 
   add(e: DeviceEvent): void {
     try {
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
       fs.appendFileSync(this.filePath, JSON.stringify(e) + "\n");
+      // Periodically trim so the file (and per-request read cost) stays bounded.
+      if (++this.sinceTrim >= 200) {
+        this.sinceTrim = 0;
+        this.trim();
+      }
     } catch (err) {
       console.error(`event write failed: ${(err as Error).message}`);
     }
+  }
+
+  private trim(): void {
+    const all = this.readAll();
+    if (all.length <= MAX_EVENTS) return;
+    const kept = all.slice(-MAX_EVENTS).map((e) => JSON.stringify(e)).join("\n") + "\n";
+    const tmp = `${this.filePath}.tmp`;
+    fs.writeFileSync(tmp, kept);
+    fs.renameSync(tmp, this.filePath);
   }
 
   private readAll(): DeviceEvent[] {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MikroTik WireGuard Provisioning</title>
+<title>Korvix · Network Control</title>
 <style>
   /* ============================================================
      Industrial NOC console theme — committed dark. Instrument
@@ -60,6 +60,9 @@
   }
   @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
   h1 small { color: var(--dim); font-weight: 400; font-size: 11px; letter-spacing: .04em; text-transform: none; }
+  h1 .brand { color: var(--accent); letter-spacing: .22em; text-shadow: 0 0 14px var(--accent-dim); }
+  h1 .brandsub { color: var(--muted); letter-spacing: .16em; font-weight: 500; }
+  #login h1 .brand { font-size: 17px; }
   header .spacer { flex: 1; }
   header .whoami {
     color: var(--muted); font-size: 11.5px; font-family: var(--mono);
@@ -290,14 +293,43 @@
   .montoggles label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text); }
   .montoggles .r { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .montoggles select { background: var(--bg); border: 1px solid var(--border2); color: var(--text); border-radius: 3px; padding: 4px 8px; font: inherit; font-size: 12.5px; }
+
+  /* ---- router faceplate / port map ---- */
+  .faceplate {
+    background: linear-gradient(180deg, #0c1219, #06090d); border: 1px solid var(--border2);
+    border-radius: 6px; padding: 14px 12px 10px; margin: 6px 0; overflow-x: auto;
+    box-shadow: inset 0 1px 0 #ffffff0c, inset 0 0 34px #0007;
+  }
+  .ports { display: flex; gap: 6px; align-items: flex-end; min-width: min-content; }
+  .pgroup { display: flex; gap: 6px; padding-right: 10px; margin-right: 4px; border-right: 1px dashed #1b2634; }
+  .pgroup:last-child { border-right: none; margin-right: 0; }
+  .port { display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+  .port .led { width: 7px; height: 7px; border-radius: 50%; background: #202d3b; box-shadow: inset 0 0 3px #000; transition: background .15s; }
+  .port.up .led { background: var(--green); box-shadow: 0 0 8px var(--green), 0 0 2px #fff inset; }
+  .port.down .led { background: #35424f; }
+  .port .jack {
+    width: 30px; height: 24px; border-radius: 3px 3px 4px 4px; border: 1px solid #2b3a4d;
+    background: linear-gradient(180deg, #1b2734, #0d141c); position: relative; transition: border-color .15s, box-shadow .15s;
+  }
+  .port .jack::after { content: ""; position: absolute; left: 9px; right: 9px; top: -1px; height: 5px; background: #0a0e13; border: 1px solid #2b3a4d; border-top: none; border-radius: 0 0 2px 2px; }
+  .port.sfp .jack { height: 15px; border-radius: 2px; background: repeating-linear-gradient(90deg, #16202b, #16202b 3px, #0e151d 3px, #0e151d 6px); }
+  .port.sfp .jack::after { display: none; }
+  .port.disabled { opacity: .4; cursor: not-allowed; }
+  .port .lbl { font-family: var(--mono); font-size: 9px; color: var(--muted); white-space: nowrap; letter-spacing: -.02em; }
+  .port.watched .jack { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 12px -2px var(--accent); }
+  .port.watched .lbl { color: var(--accent); }
+  .port:not(.disabled):hover .jack { border-color: var(--accent-dim); }
+  .plegend { display: flex; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
+  .plegend span { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
+  .plegend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 </style>
 </head>
 <body>
 
 <div id="login" class="hidden">
   <div class="panel">
-    <h1>WireGuard Provisioning</h1>
-    <p class="hint">Sign in with your account, or the admin token from config.json (username <code>admin-token</code>… just paste the token as the password).</p>
+    <h1><span class="brand">KORVIX</span> <span class="brandsub">NET CONTROL</span></h1>
+    <p class="hint">Sign in with your account, or the admin token from config.json (username <code>admin</code>… just paste the token as the password).</p>
     <label for="uInput">Username</label>
     <input id="uInput" autocomplete="username" placeholder="username (or 'admin' with the token)">
     <label for="pInput">Password</label>
@@ -309,7 +341,7 @@
 
 <div id="app" class="wrap hidden">
   <header>
-    <h1>WG&nbsp;CONTROL <small id="refreshed"></small></h1>
+    <h1><span class="brand">KORVIX</span> <span class="brandsub">NET&nbsp;CONTROL</span> <small id="refreshed"></small></h1>
     <span class="whoami mono" id="sysclock"></span>
     <div class="spacer"></div>
     <span class="whoami" id="whoami"></span>
@@ -733,6 +765,7 @@ async function openDetails(ref) {
   const transitions = (r.transitions || []).slice(-6).reverse();
   const mon = r.monitoring || { enabled: false, alertOnLogin: true, alertOnLinkDown: true };
   const dtype = r.deviceType || "customer";
+  portState = { ref: null, watch: new Set() }; // reset faceplate for this device
   const backOpts = backups.map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
   $("dBody").innerHTML = `
     <dl class="kv">
@@ -773,6 +806,10 @@ async function openDetails(ref) {
       <label><input type="checkbox" id="monEnabled" ${mon.enabled ? "checked" : ""}> Active monitoring (poll this device over the tunnel)</label>
       <label><input type="checkbox" id="monLogin" ${mon.alertOnLogin ? "checked" : ""}> Alert &amp; log on router login (Winbox/SSH/WebFig/API)</label>
       <label><input type="checkbox" id="monLink" ${mon.alertOnLinkDown ? "checked" : ""}> Alert when a watched port's link drops</label>
+      <div class="r"><span class="chips">Port map</span>
+        <button data-act="loadports" data-ref="${esc(r.id)}" style="text-transform:none;letter-spacing:0">Load from router</button>
+        <span class="chips">click a port to watch its link state</span></div>
+      <div id="portmap"><span class="chips">Load the port map to draw this device's physical ports and pick which to monitor — or type names below.</span></div>
       <div class="r"><span class="chips">Watch ports</span>
         <input id="monIfaces" placeholder="blank = auto (uplinks)" value="${esc((mon.watchInterfaces || []).join(", "))}" style="flex:1;min-width:160px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px;font-family:var(--mono);font-size:12px">
       </div>
@@ -809,6 +846,66 @@ async function openDetails(ref) {
       </div>` : ""}`;
   if (backups.length >= 2) { $("diffB").selectedIndex = 1; }
   $("details").showModal();
+}
+
+/* ---------------- port map (router faceplate) ---------------- */
+let portState = { ref: null, watch: new Set() };
+const PORT_RE = /^(ether|sfp|sfp-plus|sfpplus|qsfp|combo|wlan|lte|wifi)/i;
+function isPortType(i) { return PORT_RE.test(i.type) || PORT_RE.test(i.name); }
+function sfpish(i) { return /sfp|qsfp/i.test(i.type) || /sfp|qsfp/i.test(i.name); }
+function portGroupKey(i) {
+  const m = /^([a-z-]+)/i.exec(i.name);
+  return m ? m[1] : i.type;
+}
+async function loadPortMap(ref) {
+  const box = $("portmap");
+  box.innerHTML = '<span class="chips">querying the router over the tunnel…</span>';
+  let data;
+  try { data = await api("/api/routers/" + encodeURIComponent(ref) + "/interfaces"); }
+  catch (e) { box.innerHTML = `<span class="chips">${esc(e.message)} — type port names in the field below instead.</span>`; return; }
+  // Merge server-side watched list with anything already typed in the field.
+  const typed = ($("monIfaces").value || "").split(",").map((s) => s.trim()).filter(Boolean);
+  portState = { ref, watch: new Set([...(data.watched || []), ...typed]) };
+  renderPortMap(data.interfaces || []);
+}
+function renderPortMap(interfaces) {
+  const phys = interfaces.filter(isPortType).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  const box = $("portmap");
+  if (!phys.length) { box.innerHTML = '<span class="chips">no physical ports reported by this device</span>'; return; }
+  const groups = [];
+  let cur = null, curKey = null;
+  for (const i of phys) {
+    const k = portGroupKey(i);
+    if (k !== curKey) { cur = []; groups.push(cur); curKey = k; }
+    cur.push(i);
+  }
+  const portCell = (i) => {
+    const cls = ["port", sfpish(i) ? "sfp" : "", i.disabled ? "disabled" : (i.running ? "up" : "down"),
+      portState.watch.has(i.name) ? "watched" : ""].join(" ");
+    const st = i.disabled ? "disabled" : i.running ? "link up" : "link down";
+    return `<div class="${cls}" data-port="${esc(i.name)}" title="${esc(i.name)} · ${esc(i.type)} · ${st}">
+      <div class="led"></div><div class="jack"></div><div class="lbl">${esc(i.name)}</div></div>`;
+  };
+  box.innerHTML = `<div class="faceplate"><div class="ports">` +
+    groups.map((g) => `<div class="pgroup">${g.map(portCell).join("")}</div>`).join("") +
+    `</div></div>
+    <div class="plegend">
+      <span><i style="background:var(--green);box-shadow:0 0 6px var(--green)"></i>link up</span>
+      <span><i style="background:#35424f"></i>link down</span>
+      <span><i style="background:#202d3b"></i>disabled</span>
+      <span><i style="background:none;box-shadow:0 0 0 1px var(--accent)"></i>watched</span>
+    </div>
+    <div class="chips" id="portsum" style="margin-top:6px"></div>`;
+  updatePortSummary();
+}
+function updatePortSummary() {
+  const arr = [...portState.watch];
+  const el = $("portsum");
+  if (el) el.innerHTML = arr.length
+    ? `Watching link state on <b>${arr.length}</b> port(s): <span class="mono" style="color:var(--accent)">${arr.map(esc).join(", ")}</span>`
+    : "No ports selected — auto mode (all ethernet/SFP ports up at first poll).";
+  const f = $("monIfaces");
+  if (f) f.value = arr.join(", ");
 }
 
 async function saveMonitoring(ref) {
@@ -1099,6 +1196,16 @@ async function copy(text, what) {
 }
 
 document.addEventListener("click", async (ev) => {
+  const portEl = ev.target.closest(".port");
+  if (portEl && portState.ref) {
+    if (portEl.classList.contains("disabled")) { toast("Port is disabled — enable it on the router first"); return; }
+    const name = portEl.dataset.port;
+    if (portState.watch.has(name)) portState.watch.delete(name);
+    else portState.watch.add(name);
+    portEl.classList.toggle("watched");
+    updatePortSummary();
+    return;
+  }
   const link = ev.target.closest("a[data-dl]");
   if (link) { ev.preventDefault(); return downloadBackup(link.dataset.ref, link.dataset.serial, link.dataset.dl).catch((e) => toast(e.message)); }
   const btn = ev.target.closest("button");
@@ -1121,6 +1228,7 @@ document.addEventListener("click", async (ev) => {
     if (act === "details") await openDetails(ref);
     if (act === "savemeta") await saveMeta(ref);
     if (act === "savemon") await saveMonitoring(ref);
+    if (act === "loadports") { btn.disabled = true; btn.textContent = "Loading…"; try { await loadPortMap(ref); } finally { btn.disabled = false; btn.textContent = "Refresh port map"; } }
     if (act === "live") await openLive(ref);
     if (act === "diff") await showDiff(ref);
     if (act === "restore") await stageRestore(ref);

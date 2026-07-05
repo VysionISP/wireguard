@@ -111,6 +111,6 @@ describe("admin API", () => {
   it("serves the dashboard at /", async () => {
     const res = await request(app()).get("/");
     expect(res.status).toBe(200);
-    expect(res.text).toContain("MikroTik WireGuard Provisioning");
+    expect(res.text).toContain("KORVIX");
   });
 });

@@ -17,7 +17,7 @@ import { UserStore, SessionManager, type Role } from "./users.js";
 import { AuditLog } from "./audit.js";
 import { IssueStore } from "./issues.js";
 import { EventLog } from "./events.js";
-import { fetchLiveStats, type FetchLiveFn } from "./routeros.js";
+import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, type FetchLiveFn, type FetchIfacesFn } from "./routeros.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
 import { defaultMonitoring, type RouterRecord, type DeviceType } from "./types.js";
 
@@ -28,6 +28,7 @@ export interface AppDeps {
   /** Overrides for tests; default to the real implementations. */
   fetchInfo?: FetchInfoFn;
   fetchLive?: FetchLiveFn;
+  fetchIfaces?: FetchIfacesFn;
   backups?: BackupStore;
   alerter?: Alerter;
   tokens?: TokenStore;
@@ -50,7 +51,7 @@ const WEB_INDEX = fileURLToPath(new URL("../web/index.html", import.meta.url));
 const registerSchema = z.object({
   token: z.string(),
   publicKey: z.string().refine(isValidWgKey, "not a valid WireGuard public key"),
-  serialNumber: z.string().min(1).max(64),
+  serialNumber: z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/, "invalid serial number"),
   boardName: z.string().max(128).default("unknown"),
   rosVersion: z.string().max(128).default("unknown"),
   identity: z.string().max(128).default("MikroTik"),
@@ -92,6 +93,18 @@ export function buildApp(deps: AppDeps): Express {
   const sshRun = deps.sshRun ?? realSshRun;
   const sftpPut = deps.sftpPut ?? realSftpPut;
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
+  const fetchIfaces = deps.fetchIfaces ?? realFetchInterfaces;
+
+  // Serialises the register critical section so concurrent phone-homes can't
+  // both read the same "lowest free IP" or both burn the same one-time token
+  // across the `await wg.addPeer` in the middle. Single-process server, so a
+  // promise-chain lock is sufficient.
+  let registerLock: Promise<unknown> = Promise.resolve();
+  function withRegisterLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = registerLock.then(fn, fn);
+    registerLock = run.then(() => {}, () => {});
+    return run;
+  }
   const app = express();
   app.use(express.json({ limit: "64kb" }));
 
@@ -141,6 +154,7 @@ export function buildApp(deps: AppDeps): Express {
       return;
     }
     const body = parsed.data;
+    await withRegisterLock(async () => {
     const tokenKind = provisioningAuth(body.token, body.serialNumber);
     if (!tokenKind) {
       res.status(401).json({ error: "invalid provisioning token" });
@@ -227,6 +241,7 @@ export function buildApp(deps: AppDeps): Express {
     audit.log("router", "register", router.serialNumber, `${router.boardName} -> ${router.tunnelIp}`);
     alerter.routerRegistered(router, isRereg).catch(() => {});
     res.type("text/plain").send(renderProvision(config, router, body.token));
+    });
   });
 
   // Router confirms it applied the provisioning script.
@@ -746,6 +761,25 @@ export function buildApp(deps: AppDeps): Express {
     }
     try {
       res.json(await fetchLive(router.tunnelIp, router.username, router.password));
+    } catch (err) {
+      res.status(502).json({ error: `router unreachable: ${(err as Error).message}` });
+    }
+  });
+
+  // ---- port map: the router's interfaces for the faceplate diagram
+  app.get("/api/routers/:ref/interfaces", requireTech, async (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    if (router.state === "staged" || router.state === "revoked") {
+      res.status(400).json({ error: "router is not online" });
+      return;
+    }
+    try {
+      const ifaces = await fetchIfaces(router.tunnelIp, router.username, router.password);
+      res.json({ interfaces: ifaces, watched: router.monitoring?.watchInterfaces ?? [] });
     } catch (err) {
       res.status(502).json({ error: `router unreachable: ${(err as Error).message}` });
     }

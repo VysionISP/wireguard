@@ -10,6 +10,9 @@ export interface Issue {
   serialNumber: string;
   label: string;
   type: IssueType;
+  /** Optional sub-reference (e.g. interface name) so one router can hold
+   *  several open issues of the same type — one per affected port. */
+  ref: string;
   severity: Severity;
   message: string;
   openedAt: string;
@@ -43,9 +46,9 @@ export class IssueStore {
     fs.renameSync(tmp, this.filePath);
   }
 
-  private openOfKey(serialNumber: string, type: IssueType): Issue | undefined {
+  private openOfKey(serialNumber: string, type: IssueType, ref: string): Issue | undefined {
     return this.issues.find(
-      (i) => i.serialNumber === serialNumber && i.type === type && !i.resolvedAt,
+      (i) => i.serialNumber === serialNumber && i.type === type && i.ref === ref && !i.resolvedAt,
     );
   }
 
@@ -56,9 +59,10 @@ export class IssueStore {
     type: IssueType,
     severity: Severity,
     message: string,
+    ref = "",
   ): boolean {
     const now = new Date().toISOString();
-    const existing = this.openOfKey(serialNumber, type);
+    const existing = this.openOfKey(serialNumber, type, ref);
     if (existing) {
       existing.message = message;
       existing.updatedAt = now;
@@ -71,6 +75,7 @@ export class IssueStore {
       serialNumber,
       label,
       type,
+      ref,
       severity,
       message,
       openedAt: now,
@@ -84,9 +89,9 @@ export class IssueStore {
     return true;
   }
 
-  /** Resolve any open issue of this (serial, type). Returns true if one closed. */
-  resolve(serialNumber: string, type: IssueType): boolean {
-    const existing = this.openOfKey(serialNumber, type);
+  /** Resolve the open issue of this (serial, type, ref). Returns true if one closed. */
+  resolve(serialNumber: string, type: IssueType, ref = ""): boolean {
+    const existing = this.openOfKey(serialNumber, type, ref);
     if (!existing) return false;
     existing.resolvedAt = new Date().toISOString();
     existing.updatedAt = existing.resolvedAt;
