@@ -84,7 +84,7 @@ fi
 step "Installing prerequisites"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq wireguard-tools curl ca-certificates >/dev/null
+apt-get install -y -qq wireguard-tools curl ca-certificates openssl >/dev/null
 
 node_ok() { command -v node >/dev/null && [[ "$(node -p 'process.versions.node.split(".")[0]')" -ge 20 ]]; }
 if ! node_ok; then
@@ -133,7 +133,8 @@ if [[ -f "$CONFIG_PATH" ]]; then
     step "config.json already exists — keeping it (delete it to regenerate)"
 else
     step "Generating config.json"
-    new_token() { tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40; }
+    # No pipelines here: 'urandom | tr | head' dies of SIGPIPE under pipefail.
+    new_token() { openssl rand -hex 20; }
     PROV_TOKEN="$(new_token)"
     ADMIN_TOKEN="$(new_token)"
     (umask 077 && cat > "$CONFIG_PATH" <<EOF
