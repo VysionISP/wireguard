@@ -947,16 +947,48 @@ function pickLinkEndpoint(id) {
     return;
   }
   if (id === linkPick.a) return;
-  const a = routerById(linkPick.a), b = routerById(id);
-  const aIface = prompt(`Interface on ${a.label || a.serialNumber} for this link?`, "sfp1");
-  if (aIface === null) return cancelLinkPick();
-  const bIface = prompt(`Interface on ${b.label || b.serialNumber} for this link?`, "ether1");
-  if (bIface === null) return cancelLinkPick();
-  mapState.links.push({ id: "tmp-" + Date.now(), a: linkPick.a, aIface: aIface.trim(), b: id, bIface: bIface.trim() });
-  mapState.dirty = true;
+  const aId = linkPick.a;
   cancelLinkPick();
-  renderLinks();
-  toast("Link added — Save layout to keep it");
+  openLinkDialog(aId, id).catch((e) => toast(e.message));
+}
+async function fetchIfaceList(id) {
+  try { return (await api("/api/routers/" + encodeURIComponent(id) + "/interfaces")).interfaces; }
+  catch { return null; }
+}
+function ifacePicker(pickerId, list) {
+  if (!list || !list.length) {
+    return `<input id="${pickerId}" placeholder="interface name (device unreachable — type it)" style="width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:6px 10px;font-family:var(--mono);font-size:13px;margin:4px 0 10px">`;
+  }
+  const sorted = [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  // Default to the first running ethernet/SFP-style port.
+  const def = sorted.find((i) => i.running && /^(ether|sfp|qsfp|combo)/i.test(i.type)) || sorted.find((i) => i.running) || sorted[0];
+  return `<select id="${pickerId}" style="width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:6px 10px;font-family:var(--mono);font-size:13px;margin:4px 0 10px">
+    ${sorted.map((i) => `<option value="${esc(i.name)}" ${i === def ? "selected" : ""}>${esc(i.name)} — ${esc(i.type)}${i.disabled ? " (disabled)" : i.running ? " · up" : " · down"}</option>`).join("")}
+  </select>`;
+}
+async function openLinkDialog(aId, bId) {
+  const a = routerById(aId), b = routerById(bId);
+  $("mTitle").textContent = "Add link";
+  $("mBody").innerHTML = '<p class="chips">fetching interfaces from both devices…</p>';
+  $("modal").showModal();
+  const [ia, ib] = await Promise.all([fetchIfaceList(aId), fetchIfaceList(bId)]);
+  $("mBody").innerHTML = `
+    <div class="meta">
+      <label>${esc(a.label || a.identity || a.serialNumber)} — interface</label>
+      ${ifacePicker("lnkA", ia)}
+      <label>${esc(b.label || b.identity || b.serialNumber)} — interface</label>
+      ${ifacePicker("lnkB", ib)}
+      <button class="primary" id="lnkAdd">Add link</button>
+    </div>`;
+  $("lnkAdd").addEventListener("click", () => {
+    const aIface = ($("lnkA").value || "").trim(), bIface = ($("lnkB").value || "").trim();
+    if (!aIface || !bIface) return toast("Pick an interface on each device");
+    mapState.links.push({ id: "tmp-" + Date.now(), a: aId, aIface, b: bId, bIface });
+    mapState.dirty = true;
+    $("modal").close();
+    renderLinks();
+    toast("Link added — Save layout to keep it");
+  });
 }
 function cancelLinkPick() {
   linkPick = null;
