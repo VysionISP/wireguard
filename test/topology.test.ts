@@ -52,11 +52,29 @@ describe("groups API", () => {
     }
   });
 
-  it("groups devices by customerGroup with counts", async () => {
+  it("lists customers by device group with counts and merges records", async () => {
     await request(app).patch("/api/routers/G1").set("authorization", A()).send({ customerGroup: "Smith" });
     await request(app).patch("/api/routers/G2").set("authorization", A()).send({ customerGroup: "Smith" });
-    const groups = await request(app).get("/api/groups").set("authorization", A());
-    expect(groups.body).toEqual([{ name: "Smith", count: 2 }]);
+    // a customer record with no devices yet
+    await request(app).post("/api/customers").set("authorization", A()).send({ name: "Jones", contact: "Jane", phone: "0400" });
+    const list = await request(app).get("/api/customers").set("authorization", A());
+    const byName = Object.fromEntries(list.body.map((c: any) => [c.name, c]));
+    expect(byName.Smith.count).toBe(2);
+    expect(byName.Jones).toMatchObject({ count: 0, contact: "Jane", phone: "0400", hasRecord: true });
+  });
+
+  it("deleting a customer unassigns its devices and clears the map", async () => {
+    await request(app).patch("/api/routers/G1").set("authorization", A()).send({ customerGroup: "Smith" });
+    await request(app).post("/api/customers").set("authorization", A()).send({ name: "Smith", contact: "x" });
+    const del = await request(app).delete("/api/customers/Smith").set("authorization", A());
+    expect(del.status).toBe(200);
+    expect(store.findBySerial("G1")!.customerGroup).toBe("");
+    expect((await request(app).get("/api/customers").set("authorization", A())).body).toEqual([]);
+  });
+
+  it("customer create/delete is admin-only", async () => {
+    expect((await request(app).post("/api/customers").send({ name: "x" })).status).toBe(401);
+    expect((await request(app).delete("/api/customers/x")).status).toBe(401);
   });
 
   it("returns a group's routers + topology and saves a validated layout", async () => {

@@ -139,6 +139,8 @@ const configSchema = z.object({
   settingsPath: z.string().default("data/settings.json"),
   /** Per-customer-group topology map layouts. */
   topologyPath: z.string().default("data/topology.json"),
+  /** Customer records (contact details). */
+  customersPath: z.string().default("data/customers.json"),
 });
 
 export type Config = z.infer<typeof configSchema>;

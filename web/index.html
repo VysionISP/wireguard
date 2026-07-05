@@ -430,9 +430,11 @@
         <h2>Network map</h2>
         <select id="mapGroup"></select>
         <span class="gap"></span>
+        <button id="mapAddDevice" class="adminOnly">Add device</button>
         <button id="mapAddLink" class="adminOnly">Add link</button>
         <button id="mapSave" class="primary adminOnly">Save layout</button>
       </div>
+      <div class="pad chips" id="custDetails" style="display:none"></div>
       <div id="mapWrap" class="mapwrap">
         <svg id="mapLinks"></svg>
         <div id="mapNodes"></div>
@@ -528,10 +530,41 @@
   <section id="tab-settings" class="hidden">
     <nav class="subtabs">
       <button data-sub="general" class="active">General</button>
+      <button data-sub="customers">Customers</button>
       <button data-sub="users">Users</button>
       <button data-sub="tokens">Bootstrap tokens</button>
       <button data-sub="notify">Notifications</button>
     </nav>
+
+    <!-- CUSTOMERS -->
+    <div class="subsec hidden" id="set-customers">
+      <div class="panel">
+        <h2 id="custFormTitle">Add a customer</h2>
+        <div class="pad">
+          <div class="row2">
+            <div class="field"><label>Name *</label><input id="cName" placeholder="Smith — Ballarat East"></div>
+            <div class="field" style="flex:1;min-width:180px"><label>Contact person</label><input id="cContact" placeholder="John Smith"></div>
+            <div class="field"><label>Phone</label><input id="cPhone" placeholder="04xx xxx xxx"></div>
+          </div>
+          <div class="row2" style="margin-top:8px">
+            <div class="field" style="flex:1;min-width:200px"><label>Email</label><input id="cEmail" placeholder="john@example.com"></div>
+            <div class="field" style="flex:2;min-width:240px"><label>Address</label><input id="cAddress" placeholder="12 Example St, Ballarat"></div>
+          </div>
+          <div class="field" style="margin-top:8px"><label>Notes</label><textarea id="cNotes" class="cmd" style="font-family:inherit" placeholder="site details, gate code, etc."></textarea></div>
+          <div class="row2" style="margin-top:8px"><button class="primary" id="cSave">Save customer</button><button id="cClear">Clear</button></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Customers</h2>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Devices</th><th></th></tr></thead>
+            <tbody id="custRows"></tbody>
+          </table>
+          <div class="empty hidden" id="custEmpty">No customers yet — add one above, then assign devices from their details view.</div>
+        </div>
+      </div>
+    </div>
 
     <!-- GENERAL -->
     <div class="subsec" id="set-general">
@@ -747,9 +780,52 @@ function showSubTab(sub) {
   $("set-" + sub)?.classList.remove("hidden");
   for (const b of document.querySelectorAll("nav.subtabs button")) b.classList.toggle("active", b.dataset.sub === sub);
   if (sub === "general") loadGeneral();
+  if (sub === "customers") loadCustomers();
   if (sub === "users") loadUsers();
   if (sub === "tokens") loadTokens();
   if (sub === "notify") loadSettings();
+}
+
+/* ---------------- customers ---------------- */
+async function loadCustomers() {
+  const list = await api("/api/customers");
+  $("custEmpty").classList.toggle("hidden", list.length > 0);
+  $("custRows").innerHTML = list.map((c) => `<tr>
+    <td>${esc(c.name)}</td><td>${esc(c.contact || "—")}</td><td class="mono">${esc(c.phone || "—")}</td>
+    <td>${c.count}</td>
+    <td class="actions">
+      <button data-custedit="${esc(c.name)}">Edit</button>
+      <button class="danger" data-custdel="${esc(c.name)}">Delete</button>
+    </td></tr>`).join("");
+  window._customers = list;
+}
+function clearCustForm() {
+  for (const id of ["cName", "cContact", "cPhone", "cEmail", "cAddress", "cNotes"]) $(id).value = "";
+  $("cName").disabled = false;
+  $("custFormTitle").textContent = "Add a customer";
+}
+function editCustomer(name) {
+  const c = (window._customers || []).find((x) => x.name === name);
+  if (!c) return;
+  $("cName").value = c.name; $("cName").disabled = true; // name is the key
+  $("cContact").value = c.contact || ""; $("cPhone").value = c.phone || "";
+  $("cEmail").value = c.email || ""; $("cAddress").value = c.address || ""; $("cNotes").value = c.notes || "";
+  $("custFormTitle").textContent = "Edit " + c.name;
+  $("set-customers").scrollIntoView({ behavior: "smooth" });
+}
+async function saveCustomer() {
+  const name = $("cName").value.trim();
+  if (!name) return toast("Customer name is required");
+  try {
+    await api("/api/customers", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, contact: $("cContact").value.trim(), phone: $("cPhone").value.trim(),
+        email: $("cEmail").value.trim(), address: $("cAddress").value.trim(), notes: $("cNotes").value }),
+    });
+    toast("Customer saved");
+    clearCustForm();
+    loadCustomers();
+  } catch (e) { toast(e.message); }
 }
 async function loadGeneral() {
   const s = await api("/api/settings");
@@ -837,24 +913,52 @@ let mapState = { group: null, routers: [], nodes: {}, links: [], traffic: {}, di
 let mapES = null;
 let linkPick = null; // { a } while choosing the second endpoint
 
+let customersCache = [];
 async function loadGroups() {
-  const groups = await api("/api/groups");
+  customersCache = await api("/api/customers");
   const sel = $("mapGroup");
   const prev = sel.value;
-  sel.innerHTML = groups.length
-    ? groups.map((g) => `<option value="${esc(g.name)}">${esc(g.name)} (${g.count})</option>`).join("")
-    : '<option value="">— no groups yet —</option>';
-  if (groups.some((g) => g.name === prev)) sel.value = prev;
+  sel.innerHTML = customersCache.length
+    ? customersCache.map((g) => `<option value="${esc(g.name)}">${esc(g.name)} (${g.count})</option>`).join("")
+    : '<option value="">— no customers yet —</option>';
+  if (customersCache.some((g) => g.name === prev)) sel.value = prev;
   if (sel.value) await loadGroup(sel.value);
-  else { $("mapEmpty").classList.remove("hidden"); $("mapNodes").innerHTML = ""; $("mapLinks").innerHTML = ""; }
+  else { $("mapEmpty").classList.remove("hidden"); $("mapNodes").innerHTML = ""; $("mapLinks").innerHTML = ""; $("custDetails").style.display = "none"; }
+}
+function renderCustomerHeader(name) {
+  const c = customersCache.find((x) => x.name === name);
+  const el = $("custDetails");
+  if (!c || !(c.contact || c.phone || c.email || c.address)) { el.style.display = "none"; return; }
+  el.style.display = "";
+  el.innerHTML = [
+    c.contact && `<b>${esc(c.contact)}</b>`,
+    c.phone && `☎ ${esc(c.phone)}`,
+    c.email && `✉ ${esc(c.email)}`,
+    c.address && `⌂ ${esc(c.address)}`,
+  ].filter(Boolean).join(" &nbsp;·&nbsp; ");
 }
 async function loadGroup(name) {
   stopMapStream();
   const data = await api("/api/groups/" + encodeURIComponent(name));
   const auto = autoLayout(data.routers, data.topology.nodes);
   mapState = { group: name, routers: data.routers, nodes: auto, links: data.topology.links || [], traffic: {}, dirty: false };
+  renderCustomerHeader(name);
   renderMap();
   startMapStream(name);
+}
+async function addDeviceToCustomer() {
+  if (!mapState.group) return toast("Select a customer first");
+  const all = await api("/api/routers");
+  const inGroup = new Set(mapState.routers.map((r) => r.id));
+  const avail = all.filter((r) => !inGroup.has(r.id) && r.state !== "revoked" && r.state !== "staged");
+  if (!avail.length) return toast("No other devices to add");
+  $("mTitle").textContent = "Add device to " + mapState.group;
+  $("mBody").innerHTML = `<div class="backlist">${avail.map((r) => `
+    <div class="brow">
+      <button class="linkish" data-adddev="${esc(r.id)}">${esc(r.label || r.identity || r.serialNumber)}</button>
+      <span class="chips">${esc(r.serialNumber)} · ${r.customerGroup ? "in " + esc(r.customerGroup) : "unassigned"}</span>
+    </div>`).join("")}</div>`;
+  $("modal").showModal();
 }
 // Give any un-positioned node a spot on a grid so nothing overlaps at 0,0.
 function autoLayout(routers, saved) {
@@ -1131,8 +1235,9 @@ async function openDetails(ref) {
     <div class="meta">
       <label for="mLabel">Label (customer / site)</label>
       <input id="mLabel" value="${esc(r.label || "")}" placeholder="e.g. Smith residence — Ballarat">
-      <label for="mGroup">Customer group <span class="chips">(devices in a group share a network map)</span></label>
-      <input id="mGroup" value="${esc(r.customerGroup || "")}" placeholder="e.g. Smith — Ballarat East">
+      <label for="mGroup">Customer <span class="chips">(devices for a customer share a network map)</span></label>
+      <input id="mGroup" list="custList" value="${esc(r.customerGroup || "")}" placeholder="pick or type a customer">
+      <datalist id="custList"></datalist>
       <label for="mNotes">Notes</label>
       <textarea id="mNotes" placeholder="anything worth remembering about this install">${esc(r.notes || "")}</textarea>
       <button class="primary" data-act="savemeta" data-ref="${esc(r.id)}">Save</button>
@@ -1196,6 +1301,11 @@ async function openDetails(ref) {
       </div>` : ""}`;
   if (backups.length >= 2) { $("diffB").selectedIndex = 1; }
   $("details").showModal();
+  // Populate the customer suggestions.
+  api("/api/customers").then((cs) => {
+    const dl = $("custList");
+    if (dl) dl.innerHTML = cs.map((c) => `<option value="${esc(c.name)}"></option>`).join("");
+  }).catch(() => {});
   // Auto-draw the port map for online devices (admin only section).
   if (isAdmin() && r.tunnelIp && r.state !== "staged" && r.state !== "revoked") {
     loadPortMap(r.id).catch(() => {});
@@ -1642,6 +1752,17 @@ document.addEventListener("click", async (ev) => {
   if (d.tkdel != null) { if (confirm("Delete this token?")) { await api("/api/tokens/" + encodeURIComponent(d.tkdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadTokens(); } return; }
   if (d.usdel != null) { if (confirm(`Remove user ${d.usdel}?`)) { await api("/api/users/" + encodeURIComponent(d.usdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadUsers(); } return; }
   if (d.usreset != null) { return resetUserPassword(d.usreset); }
+  if (d.custedit != null) { return editCustomer(d.custedit); }
+  if (d.custdel != null) { if (confirm(`Delete customer "${d.custdel}"? Devices are unassigned and its map is cleared.`)) { await api("/api/customers/" + encodeURIComponent(d.custdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadCustomers(); } return; }
+  if (d.adddev != null) {
+    try {
+      await api("/api/routers/" + encodeURIComponent(d.adddev), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ customerGroup: mapState.group }) });
+      $("modal").close();
+      await loadGroup(mapState.group);
+      toast("Device added to " + mapState.group);
+    } catch (e) { toast(e.message); }
+    return;
+  }
   if (d.tgtest != null) { try { await api("/api/settings/telegram/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chatId: d.tgtest }) }); toast("Test message sent"); } catch (e) { toast(e.message); } return; }
   if (d.issack != null) { await api("/api/issues/" + encodeURIComponent(d.issack) + "/ack", { method: "POST" }).catch((e)=>toast(e.message)); loadStatus(); return; }
   if (d.issres != null) { await api("/api/issues/" + encodeURIComponent(d.issres) + "/resolve", { method: "POST" }).catch((e)=>toast(e.message)); loadStatus(); return; }
@@ -1772,6 +1893,7 @@ $("acctBtn").addEventListener("click", openAccount);
 $("modal").addEventListener("close", stopLiveStream); // stop live stream when modal closes
 $("search").addEventListener("input", render);
 $("mapGroup").addEventListener("change", (e) => loadGroup(e.target.value).catch((err) => toast(err.message)));
+$("mapAddDevice").addEventListener("click", () => addDeviceToCustomer().catch((e) => toast(e.message)));
 $("mapAddLink").addEventListener("click", startAddLink);
 $("mapSave").addEventListener("click", saveMap);
 $("mapLinks").addEventListener("click", (e) => {
@@ -1792,6 +1914,8 @@ $("usBtn").addEventListener("click", addUser);
 $("auditReload").addEventListener("click", () => loadAudit().catch((e) => toast(e.message)));
 for (const b of document.querySelectorAll("nav.subtabs button")) b.addEventListener("click", () => showSubTab(b.dataset.sub));
 $("gSave").addEventListener("click", saveGeneral);
+$("cSave").addEventListener("click", saveCustomer);
+$("cClear").addEventListener("click", clearCustForm);
 $("tgVerify").addEventListener("click", verifyTelegram);
 $("tgSave").addEventListener("click", saveTelegram);
 $("tgChatRows").addEventListener("change", (e) => {

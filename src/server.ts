@@ -21,6 +21,7 @@ import { SettingsStore, ROUTE_KEYS, type RouteChat } from "./settings.js";
 import { telegram as realTelegram, type TelegramClient } from "./telegram.js";
 import { interfaceRates, type Sample } from "./stream.js";
 import { TopologyStore, type GroupTopology } from "./topology.js";
+import { CustomerStore } from "./customers.js";
 import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, type FetchLiveFn, type FetchIfacesFn } from "./routeros.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
 import { defaultMonitoring, type RouterRecord, type DeviceType } from "./types.js";
@@ -44,6 +45,7 @@ export interface AppDeps {
   settings?: SettingsStore;
   telegram?: TelegramClient;
   topology?: TopologyStore;
+  customers?: CustomerStore;
   sshRun?: SshRunFn;
   sftpPut?: SftpPutFn;
 }
@@ -101,6 +103,7 @@ export function buildApp(deps: AppDeps): Express {
   const settings = deps.settings ?? new SettingsStore(config.settingsPath);
   const telegram = deps.telegram ?? realTelegram;
   const topology = deps.topology ?? new TopologyStore(config.topologyPath);
+  const customers = deps.customers ?? new CustomerStore(config.customersPath);
   const sshRun = deps.sshRun ?? realSshRun;
   const sftpPut = deps.sftpPut ?? realSftpPut;
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
@@ -1007,14 +1010,72 @@ export function buildApp(deps: AppDeps): Express {
     return store.list().filter((r) => (r.customerGroup ?? "") === name && r.state !== "revoked");
   }
 
-  app.get("/api/groups", requireTech, (_req: Request, res: Response) => {
+  // Customers = customer records (details) unioned with any group names in
+  // use on devices, each with a device count.
+  app.get("/api/customers", requireTech, (_req: Request, res: Response) => {
     const counts = new Map<string, number>();
     for (const r of store.list()) {
       if (r.state === "revoked") continue;
       const g = r.customerGroup?.trim();
       if (g) counts.set(g, (counts.get(g) ?? 0) + 1);
     }
-    res.json([...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name)));
+    const names = new Set<string>([...counts.keys(), ...customers.list().map((c) => c.name)]);
+    const out = [...names].map((name) => {
+      const rec = customers.get(name);
+      return {
+        name,
+        count: counts.get(name) ?? 0,
+        contact: rec?.contact ?? "",
+        phone: rec?.phone ?? "",
+        email: rec?.email ?? "",
+        address: rec?.address ?? "",
+        notes: rec?.notes ?? "",
+        hasRecord: Boolean(rec),
+      };
+    });
+    res.json(out.sort((a, b) => a.name.localeCompare(b.name)));
+  });
+  app.post("/api/customers", requireAdmin, (req: Request, res: Response) => {
+    const parsed = z
+      .object({
+        name: z.string().min(1).max(80),
+        contact: z.string().max(120).optional(),
+        phone: z.string().max(60).optional(),
+        email: z.string().max(160).optional(),
+        address: z.string().max(400).optional(),
+        notes: z.string().max(4000).optional(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid customer" });
+      return;
+    }
+    const { name, ...fields } = parsed.data;
+    const c = customers.upsert(name.trim(), fields);
+    audit.log(who(req), "customer.save", c.name);
+    res.json({ ok: true, customer: c });
+  });
+
+  app.delete("/api/customers/:name", requireAdmin, (req: Request, res: Response) => {
+    const name = req.params.name;
+    const existed = customers.delete(name);
+    // Unassign devices + drop the map so nothing dangles.
+    let unassigned = 0;
+    for (const r of store.list()) {
+      if ((r.customerGroup ?? "") === name) {
+        r.customerGroup = "";
+        r.updatedAt = new Date().toISOString();
+        store.save(r);
+        unassigned++;
+      }
+    }
+    topology.set(name, { nodes: {}, links: [] }, new Set());
+    if (!existed && unassigned === 0) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    audit.log(who(req), "customer.delete", name, `${unassigned} device(s) unassigned`);
+    res.json({ ok: true });
   });
 
   app.get("/api/groups/:name", requireTech, async (req: Request, res: Response) => {
