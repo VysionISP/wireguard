@@ -357,6 +357,7 @@
     <button data-tab="bulk" class="adminOnly">Bulk actions</button>
     <button data-tab="tokens" class="adminOnly">Bootstrap tokens</button>
     <button data-tab="users" class="adminOnly">Users</button>
+    <button data-tab="settings" class="adminOnly">Settings</button>
     <button data-tab="audit" class="adminOnly">Audit log</button>
   </nav>
 
@@ -516,6 +517,38 @@
     </div>
   </section>
 
+  <!-- SETTINGS -->
+  <section id="tab-settings" class="hidden">
+    <div class="panel">
+      <h2>Telegram notifications</h2>
+      <div class="pad">
+        <div class="field" style="max-width:520px">
+          <label>Bot token <span class="chips">(from @BotFather)</span></label>
+          <input id="tgToken" type="password" placeholder="123456789:AА…" autocomplete="off">
+        </div>
+        <div class="row2" style="margin:10px 0">
+          <button class="primary" id="tgVerify">Verify &amp; fetch chats</button>
+          <span class="chips" id="tgStatus"></span>
+        </div>
+        <div class="chips" style="max-width:640px">Add the bot to your group/channel (as an admin for channels), then send a message there — it must have at least one recent update for the bot to see the chat. Click Verify to pull the list.</div>
+      </div>
+    </div>
+    <div class="panel" id="tgChatsPanel">
+      <h2>Route notifications to chats</h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Use</th><th>Chat</th><th>Type</th><th>New device</th><th>Offline</th><th>Online</th><th>Login</th><th>Link</th><th></th></tr></thead>
+          <tbody id="tgChatRows"></tbody>
+        </table>
+        <div class="empty" id="tgChatEmpty">Verify a bot token above to list chats, or your saved chats will appear here.</div>
+      </div>
+      <div class="pad row2">
+        <button class="primary" id="tgSave">Save routing</button>
+        <span class="chips">Tick a category per chat to send those notifications there. Use the row toggle to include/exclude a chat entirely.</span>
+      </div>
+    </div>
+  </section>
+
   <!-- AUDIT -->
   <section id="tab-audit" class="hidden">
     <div class="panel">
@@ -618,6 +651,7 @@ function showTab(name) {
   if (name === "tokens") loadTokens();
   if (name === "users") loadUsers();
   if (name === "audit") loadAudit();
+  if (name === "settings") loadSettings();
   if (name === "bulk") updateBulkInfo();
 }
 function curTab() {
@@ -1179,6 +1213,57 @@ async function changeMyPassword() {
   } catch (e) { toast(e.message); }
 }
 
+/* ---------------- settings: telegram ---------------- */
+const ROUTE_LABELS = { registered: "New device", offline: "Offline", online: "Online", login: "Login", link: "Link" };
+let tgChats = []; // [{id,title,type,events:{...}}]
+function renderTgChats() {
+  $("tgChatEmpty").classList.toggle("hidden", tgChats.length > 0);
+  const keys = ["registered", "offline", "online", "login", "link"];
+  $("tgChatRows").innerHTML = tgChats.map((c, idx) => `
+    <tr>
+      <td><input type="checkbox" data-tguse="${idx}" ${c._use ? "checked" : ""}></td>
+      <td>${esc(c.title)}</td>
+      <td><span class="role">${esc(c.type)}</span></td>
+      ${keys.map((k) => `<td><input type="checkbox" data-tgev="${idx}:${k}" ${c.events && c.events[k] ? "checked" : ""}></td>`).join("")}
+      <td class="actions"><button data-tgtest="${esc(c.id)}">Test</button></td>
+    </tr>`).join("");
+}
+async function loadSettings() {
+  const s = await api("/api/settings");
+  $("tgStatus").textContent = s.telegram.hasToken ? `token saved (${s.telegram.tokenHint})` : "no token saved yet";
+  tgChats = (s.telegram.chats || []).map((c) => ({ ...c, _use: true }));
+  renderTgChats();
+}
+async function verifyTelegram() {
+  const botToken = $("tgToken").value.trim();
+  if (!botToken) return toast("Enter the bot token");
+  $("tgVerify").disabled = true; $("tgVerify").textContent = "Verifying…";
+  try {
+    const r = await api("/api/settings/telegram/verify", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ botToken }),
+    });
+    $("tgStatus").textContent = `bot @${r.username} · ${r.chats.length} chat(s) found`;
+    // Merge discovered chats with any already-configured routing.
+    const prev = Object.fromEntries(tgChats.map((c) => [c.id, c.events]));
+    tgChats = r.chats.map((c) => ({ ...c, _use: true, events: prev[c.id] || { registered: true, offline: true, online: false, login: true, link: true } }));
+    if (!tgChats.length) toast("No chats found — message the bot in your group/channel first, then Verify again");
+    renderTgChats();
+  } catch (e) { $("tgStatus").textContent = e.message; toast(e.message); }
+  finally { $("tgVerify").disabled = false; $("tgVerify").textContent = "Verify & fetch chats"; }
+}
+async function saveTelegram() {
+  const botToken = $("tgToken").value.trim();
+  if (!botToken) return toast("Enter/verify the bot token before saving");
+  const chats = tgChats.filter((c) => c._use).map((c) => ({ id: c.id, title: c.title, type: c.type, events: c.events || {} }));
+  try {
+    await api("/api/settings/telegram", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ botToken, chats }),
+    });
+    toast(`Saved — routing to ${chats.length} chat(s)`);
+    loadSettings();
+  } catch (e) { toast(e.message); }
+}
+
 /* ---------------- audit ---------------- */
 async function loadAudit() {
   const list = await api("/api/audit");
@@ -1219,6 +1304,7 @@ document.addEventListener("click", async (ev) => {
   if (d.tkdel != null) { if (confirm("Delete this token?")) { await api("/api/tokens/" + encodeURIComponent(d.tkdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadTokens(); } return; }
   if (d.usdel != null) { if (confirm(`Remove user ${d.usdel}?`)) { await api("/api/users/" + encodeURIComponent(d.usdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadUsers(); } return; }
   if (d.usreset != null) { return resetUserPassword(d.usreset); }
+  if (d.tgtest != null) { try { await api("/api/settings/telegram/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chatId: d.tgtest }) }); toast("Test message sent"); } catch (e) { toast(e.message); } return; }
   if (d.issack != null) { await api("/api/issues/" + encodeURIComponent(d.issack) + "/ack", { method: "POST" }).catch((e)=>toast(e.message)); loadStatus(); return; }
   if (d.issres != null) { await api("/api/issues/" + encodeURIComponent(d.issres) + "/resolve", { method: "POST" }).catch((e)=>toast(e.message)); loadStatus(); return; }
   if (d.preset != null) { $("bulkCmd").value = d.preset; return; }
@@ -1323,6 +1409,13 @@ $("bulkRun").addEventListener("click", runBulk);
 $("tkBtn").addEventListener("click", () => createToken().catch((e) => toast(e.message)));
 $("usBtn").addEventListener("click", addUser);
 $("auditReload").addEventListener("click", () => loadAudit().catch((e) => toast(e.message)));
+$("tgVerify").addEventListener("click", verifyTelegram);
+$("tgSave").addEventListener("click", saveTelegram);
+$("tgChatRows").addEventListener("change", (e) => {
+  const t = e.target;
+  if (t.dataset.tguse != null) { tgChats[+t.dataset.tguse]._use = t.checked; }
+  else if (t.dataset.tgev != null) { const [i, k] = t.dataset.tgev.split(":"); tgChats[+i].events = tgChats[+i].events || {}; tgChats[+i].events[k] = t.checked; }
+});
 $("psBtn").addEventListener("click", async () => {
   const serialNumber = $("psSerial").value.trim();
   const label = $("psLabel").value.trim();

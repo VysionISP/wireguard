@@ -135,6 +135,8 @@ const configSchema = z.object({
   usersPath: z.string().default("data/users.json"),
   /** Append-only audit log (JSONL). */
   auditPath: z.string().default("data/audit.jsonl"),
+  /** Dashboard-editable runtime settings (Telegram routing). */
+  settingsPath: z.string().default("data/settings.json"),
 });
 
 export type Config = z.infer<typeof configSchema>;

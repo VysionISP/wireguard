@@ -133,6 +133,18 @@ online alert per window. The webhook receives
 `{text, event, router:{serialNumber,label,tunnelIp}}` — point it at Slack,
 Discord, n8n, or your own endpoint.
 
+### Telegram routing (Settings tab)
+
+Beyond the static config above, the **Settings** tab (admin) configures
+Telegram interactively: paste a bot token (from @BotFather), click **Verify &
+fetch chats** — the server calls `getMe` + `getUpdates` and lists every chat
+the bot can reach (add the bot to your group/channel and message it once so it
+appears). Then tick, per chat, which notification categories it receives — New
+device, Offline, Online, Login, Link — and **Test** sends a message to that
+chat. Routing is stored in `settingsPath` (`data/settings.json`) and the
+alerter fans each event out to the subscribed chats. This is layered on top of
+(not instead of) the config.json webhook/Telegram settings.
+
 ## One-time bootstrap tokens
 
 The shared `provisioningToken` lives in every bootstrap script, so a leaked
@@ -295,6 +307,8 @@ require the admin role.
 | `GET/POST/DELETE /api/tokens` | admin | Manage one-time bootstrap tokens |
 | `GET/POST/DELETE /api/users` | admin | Manage dashboard users |
 | `GET /api/audit` | admin | Recent audit entries |
+| `GET/POST /api/settings/telegram*` | admin | Telegram token, verify/fetch chats, routing, test |
+| `GET /api/routers/:ref/interfaces` | tech | Router ports for the faceplate diagram |
 | `GET /api/issues` | tech | Active issues + counts (status board) |
 | `POST /api/issues/:id/ack` / `…/resolve` | tech | Acknowledge / clear an issue |
 | `GET /api/events` / `/api/routers/:ref/events` | tech | Global / per-device event feed |

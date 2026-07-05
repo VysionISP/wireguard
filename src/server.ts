@@ -17,6 +17,8 @@ import { UserStore, SessionManager, type Role } from "./users.js";
 import { AuditLog } from "./audit.js";
 import { IssueStore } from "./issues.js";
 import { EventLog } from "./events.js";
+import { SettingsStore, ROUTE_KEYS, type RouteChat } from "./settings.js";
+import { telegram as realTelegram, type TelegramClient } from "./telegram.js";
 import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, type FetchLiveFn, type FetchIfacesFn } from "./routeros.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
 import { defaultMonitoring, type RouterRecord, type DeviceType } from "./types.js";
@@ -37,6 +39,8 @@ export interface AppDeps {
   audit?: AuditLog;
   issues?: IssueStore;
   events?: EventLog;
+  settings?: SettingsStore;
+  telegram?: TelegramClient;
   sshRun?: SshRunFn;
   sftpPut?: SftpPutFn;
 }
@@ -90,6 +94,8 @@ export function buildApp(deps: AppDeps): Express {
   const audit = deps.audit ?? new AuditLog(config.auditPath);
   const issues = deps.issues ?? new IssueStore(config.issuesPath);
   const events = deps.events ?? new EventLog(config.eventsPath);
+  const settings = deps.settings ?? new SettingsStore(config.settingsPath);
+  const telegram = deps.telegram ?? realTelegram;
   const sshRun = deps.sshRun ?? realSshRun;
   const sftpPut = deps.sftpPut ?? realSftpPut;
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
@@ -671,6 +677,89 @@ export function buildApp(deps: AppDeps): Express {
   // ---- audit trail
   app.get("/api/audit", requireAdmin, (_req: Request, res: Response) => {
     res.json(audit.recent(200));
+  });
+
+  // ---- settings (Telegram notifications)
+  app.get("/api/settings", requireAdmin, (_req: Request, res: Response) => {
+    const tg = settings.telegram();
+    // Never return the raw token; just whether one is set and a hint.
+    res.json({
+      telegram: {
+        hasToken: Boolean(tg.botToken),
+        tokenHint: tg.botToken ? tg.botToken.slice(0, 8) + "…" : "",
+        chats: tg.chats,
+      },
+      routeKeys: ROUTE_KEYS,
+    });
+  });
+
+  // Validate a bot token and list the chats it can reach.
+  app.post("/api/settings/telegram/verify", requireAdmin, async (req: Request, res: Response) => {
+    const parsed = z.object({ botToken: z.string().min(20).max(200) }).safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "provide a bot token" });
+      return;
+    }
+    try {
+      const me = await telegram.getMe(parsed.data.botToken);
+      const chats = await telegram.getChats(parsed.data.botToken);
+      res.json({ ok: true, username: me.username, chats });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // Save the token + per-chat routing.
+  app.post("/api/settings/telegram", requireAdmin, (req: Request, res: Response) => {
+    const parsed = z
+      .object({
+        botToken: z.string().max(200),
+        chats: z
+          .array(
+            z.object({
+              id: z.string().max(64),
+              title: z.string().max(200),
+              type: z.string().max(32),
+              events: z.record(z.boolean()),
+            }),
+          )
+          .max(200),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid settings" });
+      return;
+    }
+    // Normalise events to the known keys.
+    const chats: RouteChat[] = parsed.data.chats.map((c) => ({
+      id: c.id,
+      title: c.title,
+      type: c.type,
+      events: Object.fromEntries(ROUTE_KEYS.map((k) => [k, Boolean(c.events[k])])) as RouteChat["events"],
+    }));
+    settings.setTelegram(parsed.data.botToken.trim(), chats);
+    audit.log(who(req), "settings.telegram", `${chats.length} chat(s)`);
+    res.json({ ok: true });
+  });
+
+  // Send a test message to one chat.
+  app.post("/api/settings/telegram/test", requireAdmin, async (req: Request, res: Response) => {
+    const parsed = z.object({ chatId: z.string().max(64) }).safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "provide a chatId" });
+      return;
+    }
+    const tg = settings.telegram();
+    if (!tg.botToken) {
+      res.status(400).json({ error: "no bot token saved — verify and save first" });
+      return;
+    }
+    try {
+      await telegram.send(tg.botToken, parsed.data.chatId, "✅ Korvix test notification — routing works.");
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
   });
 
   // ---- status board: issues + events

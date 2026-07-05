@@ -1,9 +1,16 @@
 import type { Config } from "./config.js";
 import type { RouterRecord } from "./types.js";
+import type { SettingsStore, RouteKey } from "./settings.js";
+import { telegram as realTelegram, type TelegramClient } from "./telegram.js";
 
 type AlertEvent = "offline" | "online" | "registered" | "login" | "link-down" | "link-up";
 
 export type SendFn = (text: string, event: AlertEvent, router: RouterRecord) => Promise<void>;
+
+/** Maps an alert event to the notification category a chat subscribes to. */
+export function routeKey(event: AlertEvent): RouteKey {
+  return event === "link-down" || event === "link-up" ? "link" : event;
+}
 
 function routerName(r: RouterRecord): string {
   return r.label ? `${r.label} (${r.serialNumber})` : `${r.serialNumber} / ${r.identity}`;
@@ -21,10 +28,19 @@ export class Alerter {
     private readonly cfg: Config["alerts"],
     /** Injectable for tests; defaults to real webhook/Telegram delivery. */
     private readonly send: SendFn | null = null,
+    /** Dashboard-configured Telegram routing (optional). */
+    private readonly settings: SettingsStore | null = null,
+    private readonly tg: TelegramClient = realTelegram,
   ) {}
 
   get enabled(): boolean {
-    return Boolean(this.cfg.webhookUrl || (this.cfg.telegramBotToken && this.cfg.telegramChatId));
+    const tg = this.settings?.telegram();
+    const settingsTelegram = Boolean(tg?.botToken && tg.chats.length);
+    return Boolean(
+      this.cfg.webhookUrl ||
+        (this.cfg.telegramBotToken && this.cfg.telegramChatId) ||
+        settingsTelegram,
+    );
   }
 
   private async deliver(text: string, event: AlertEvent, router: RouterRecord): Promise<void> {
@@ -45,14 +61,16 @@ export class Alerter {
       );
     }
     if (this.cfg.telegramBotToken && this.cfg.telegramChatId) {
-      jobs.push(
-        fetch(`https://api.telegram.org/bot${this.cfg.telegramBotToken}/sendMessage`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ chat_id: this.cfg.telegramChatId, text }),
-          signal: AbortSignal.timeout(10000),
-        }),
-      );
+      jobs.push(this.tg.send(this.cfg.telegramBotToken, this.cfg.telegramChatId, text));
+    }
+    // Dashboard-configured routing: send to each chat subscribed to this
+    // event category.
+    const tgSettings = this.settings?.telegram();
+    if (tgSettings?.botToken) {
+      const key = routeKey(event);
+      for (const chat of tgSettings.chats) {
+        if (chat.events?.[key]) jobs.push(this.tg.send(tgSettings.botToken, chat.id, text));
+      }
     }
     const results = await Promise.allSettled(jobs);
     for (const r of results) {

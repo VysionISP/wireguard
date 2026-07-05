@@ -14,6 +14,7 @@ import { TokenStore } from "./tokens.js";
 import { UserStore } from "./users.js";
 import { IssueStore } from "./issues.js";
 import { EventLog } from "./events.js";
+import { SettingsStore } from "./settings.js";
 
 function makeWg(config: Config): WireguardManager {
   return config.wireguard.applyMode === "wg"
@@ -41,10 +42,11 @@ program
     // re-apply the whole inventory before accepting traffic.
     const { applied, failed } = await syncPeers(store, wg);
     if (applied || failed) console.log(`peer sync: ${applied} applied, ${failed} failed`);
-    const alerter = new Alerter(config.alerts);
+    const settings = new SettingsStore(config.settingsPath);
+    const alerter = new Alerter(config.alerts, null, settings);
     const issues = new IssueStore(config.issuesPath);
     const events = new EventLog(config.eventsPath);
-    const app = buildApp({ config, store, wg, alerter, issues, events });
+    const app = buildApp({ config, store, wg, alerter, issues, events, settings });
     startMonitor(store, wg, config.monitor.intervalSeconds, config.monitor.offlineAfterSeconds, alerter, { issues, events });
     if (config.deviceMonitor.enabled) {
       startDeviceMonitor(
