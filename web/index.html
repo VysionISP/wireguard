@@ -184,6 +184,7 @@
     <h1>MikroTik fleet <small id="refreshed"></small></h1>
     <div class="spacer"></div>
     <span class="whoami" id="whoami"></span>
+    <button id="acctBtn">My account</button>
     <button id="reloadBtn">Refresh</button>
     <button id="logoutBtn">Sign out</button>
   </header>
@@ -527,8 +528,9 @@ async function openDetails(ref) {
     <div class="translist">${transitions.map((t) => `
       <div><span class="dot ${t.online ? "on" : "off"}"></span> went ${t.online ? "online" : "offline"} — ${fmtDate(t.at)}</div>`).join("")}
     </div>` : ""}
-    <div class="sub">Config backups</div>
-    <div class="backlist">${backups.length ? backups.map((b) => `
+    <div class="sub" style="display:flex;align-items:center;gap:10px">Config backups
+      ${r.tunnelIp ? `<button data-act="backupnow" data-ref="${esc(r.id)}" style="text-transform:none;letter-spacing:0">Back up now</button>` : ""}</div>
+    <div class="backlist" id="backlist">${backups.length ? backups.map((b) => `
       <div><a data-dl="${esc(b.name)}" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">${esc(b.name)}</a>
       <span style="color:var(--muted)">${(b.size / 1024).toFixed(1)} KB</span></div>`).join("")
       : '<div style="color:var(--muted)">none yet — the router pushes its config on schedule after provisioning</div>'}
@@ -714,7 +716,10 @@ async function loadUsers() {
   $("userRows").innerHTML = list.map((u) => `<tr>
     <td>${esc(u.username)}</td><td><span class="role">${esc(u.role)}</span></td>
     <td>${fmtDate(u.createdAt)}</td>
-    <td class="actions"><button class="danger" data-usdel="${esc(u.username)}">Remove</button></td>
+    <td class="actions">
+      <button data-usreset="${esc(u.username)}">Reset password</button>
+      <button class="danger" data-usdel="${esc(u.username)}">Remove</button>
+    </td>
   </tr>`).join("");
 }
 async function addUser() {
@@ -735,6 +740,46 @@ async function addUser() {
       <p class="chips" style="margin-top:8px">Shown once — share it securely.</p>`;
     $("modal").showModal();
     loadUsers();
+  } catch (e) { toast(e.message); }
+}
+
+async function resetUserPassword(username) {
+  if (!confirm(`Reset ${username}'s password? Their current sessions end and a new password is generated.`)) return;
+  try {
+    const r = await api("/api/users/" + encodeURIComponent(username) + "/password", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    $("mTitle").textContent = "Password reset";
+    $("mBody").innerHTML = `<p>New password for <b>${esc(r.username)}</b>:</p>
+      <div class="cred"><div class="row"><span>password</span><code class="mono">${esc(r.password)}</code>
+      <button data-copy="${esc(r.password)}">Copy</button></div></div>
+      <p class="chips" style="margin-top:8px">Shown once — share it securely.</p>`;
+    $("modal").showModal();
+  } catch (e) { toast(e.message); }
+}
+
+/* ---------------- my account ---------------- */
+function openAccount() {
+  $("mTitle").textContent = "My account";
+  const named = me && me.username !== "admin-token";
+  $("mBody").innerHTML = named ? `
+    <p class="chips">Signed in as <b>${esc(me.username)}</b> (${esc(me.role)}).</p>
+    <div class="meta">
+      <label>Current password</label><input id="pwCur" type="password" autocomplete="current-password">
+      <label>New password (min 8 chars)</label><input id="pwNew" type="password" autocomplete="new-password">
+      <label>Confirm new password</label><input id="pwNew2" type="password" autocomplete="new-password">
+      <button class="primary" id="pwSave">Change password</button>
+    </div>`
+    : `<p>You're signed in with the <b>admin token</b>, which has no password to change. Create a named account in the Users tab and sign in with that to manage a personal password.</p>`;
+  $("modal").showModal();
+  if (named) $("pwSave").addEventListener("click", changeMyPassword);
+}
+async function changeMyPassword() {
+  const current = $("pwCur").value, next = $("pwNew").value, confirm2 = $("pwNew2").value;
+  if (next.length < 8) return toast("New password must be at least 8 characters");
+  if (next !== confirm2) return toast("New passwords do not match");
+  try {
+    await api("/api/account/password", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ current, next }) });
+    toast("Password changed");
+    $("modal").close();
   } catch (e) { toast(e.message); }
 }
 
@@ -764,6 +809,7 @@ document.addEventListener("click", async (ev) => {
   if (d.tkcopy != null) { const t = await api("/api/bootstrap-info").catch(() => null); return copy(location.origin ? `/tool fetch url="${location.origin}/bootstrap.rsc?token=${d.tkcopy}" dst-path=bootstrap.rsc; :delay 2s; /import bootstrap.rsc` : d.tkcopy, "One-liner"); }
   if (d.tkdel != null) { if (confirm("Delete this token?")) { await api("/api/tokens/" + encodeURIComponent(d.tkdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadTokens(); } return; }
   if (d.usdel != null) { if (confirm(`Remove user ${d.usdel}?`)) { await api("/api/users/" + encodeURIComponent(d.usdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadUsers(); } return; }
+  if (d.usreset != null) { return resetUserPassword(d.usreset); }
   if (d.preset != null) { $("bulkCmd").value = d.preset; return; }
   const { act, ref } = d;
   if (!act) return;
@@ -773,6 +819,14 @@ document.addEventListener("click", async (ev) => {
     if (act === "live") await openLive(ref);
     if (act === "diff") await showDiff(ref);
     if (act === "restore") await stageRestore(ref);
+    if (act === "backupnow") {
+      btn.disabled = true; btn.textContent = "Backing up…";
+      try {
+        const r = await api("/api/routers/" + encodeURIComponent(ref) + "/backup-now", { method: "POST" });
+        toast(r.stored ? "New backup saved" : "Backed up — config unchanged since last version");
+        await openDetails(ref);
+      } finally { btn.disabled = false; btn.textContent = "Back up now"; }
+    }
     if (act === "verify") {
       btn.disabled = true; btn.textContent = "…";
       const v = await api("/api/routers/" + encodeURIComponent(ref) + "/verify", { method: "POST" });
@@ -838,6 +892,7 @@ $("logoutBtn").addEventListener("click", async () => {
   localStorage.removeItem("mtprov.token"); token = ""; showLogin();
 });
 $("reloadBtn").addEventListener("click", () => load().catch((e) => toast(e.message)));
+$("acctBtn").addEventListener("click", openAccount);
 $("search").addEventListener("input", render);
 $("csvBtn").addEventListener("click", exportCsv);
 $("bulkAll").addEventListener("change", updateBulkInfo);

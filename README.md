@@ -107,12 +107,21 @@ The dashboard supports named accounts with two roles:
 - **tech** — view the fleet, verify routers, see live stats, view/download backups
 - **admin** — everything, plus revoke, bulk commands, tokens, users, restore staging
 
-Create users with `mtprov user add <name> <admin|tech>` (prints a generated
-password) or from the Users tab. The legacy `adminToken` still works as a
-break-glass admin login (username `admin`, token as the password) and for API
-scripting. Sessions last `auth.sessionHours` (default 12) with sliding expiry.
-Every mutating action is written to an append-only audit log
-(`auditPath`, viewable in the Audit tab).
+Manage users entirely from the **Users** tab — add users (with a chosen or
+generated password), reset any user's password (ends their sessions), and
+remove them. Each person can change their own password from the **My account**
+button in the header. `mtprov user add/list/rm` still exists for bootstrapping
+the first admin, but the CLI is never required after that. The legacy
+`adminToken` also works as a break-glass admin login (username `admin`, token
+as the password) and for API scripting. Sessions last `auth.sessionHours`
+(default 12) with sliding expiry. Every mutating action is written to an
+append-only audit log (`auditPath`, viewable in the Audit tab).
+
+> First login on a fresh install: sign in with username `admin` and your
+> `adminToken` as the password, then create your personal account in the
+> Users tab. (Creating a user from the CLI while the server is already
+> running needs a `systemctl restart mtprov` to be picked up; creating it
+> from the dashboard does not.)
 
 ## Alerts
 
@@ -159,7 +168,10 @@ firmware update check, and reboot.
 The details view diffs any two stored config versions (colourised) and, for
 admins, stages a restore: the chosen backup is uploaded to the router as
 `wg-restore.rsc` for you to review and `/import` manually — never auto-applied,
-because replaying a full export onto a live device needs human eyes.
+because replaying a full export onto a live device needs human eyes. A **Back
+up now** button in the same view triggers an immediate `/export` over SSH
+(stored only if the config changed) — handy for a snapshot right before you
+make a change.
 
 ## Fleet monitoring
 
@@ -232,12 +244,15 @@ require the admin role.
 | `GET /` | none (UI does client-side auth) | Web dashboard |
 | `POST /api/login` | none | Exchange username/password for a session token |
 | `POST /api/logout` / `GET /api/me` | tech | End session / current identity |
+| `POST /api/account/password` | tech | Change your own password |
+| `POST /api/users/:username/password` | admin | Reset a user's password |
 | `GET /api/routers` | tech | Inventory with handshake ages + online flag |
 | `GET /api/routers/:ref` | tech | Full details incl. credentials (ref = id, serial or tunnel IP) |
 | `POST /api/routers/:ref/verify` | tech | Handshake + REST reachability check; marks `verified` |
 | `GET /api/routers/:ref/live` | tech | Live stats over the tunnel (system, interfaces, LTE) |
 | `PATCH /api/routers/:ref` | tech | Set `label` / `notes` |
 | `GET /api/routers/:ref/backups` / `…/:name` | tech | List / download backup versions |
+| `POST /api/routers/:ref/backup-now` | tech | Trigger an immediate `/export` backup over SSH |
 | `GET /api/routers/:ref/backups-diff?a&b` | tech | Diff two backup versions |
 | `POST /api/routers/:ref/revoke` | admin | Remove peer, block re-registration |
 | `POST /api/routers/:ref/restore` | admin | Upload a backup to the router as `wg-restore.rsc` |

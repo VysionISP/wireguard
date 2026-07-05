@@ -300,6 +300,34 @@ export function buildApp(deps: AppDeps): Express {
     res.json((req as AuthedRequest).authUser);
   });
 
+  // Change your own password (real accounts only, not the admin-token login).
+  app.post("/api/account/password", requireTech, (req: Request, res: Response) => {
+    const parsed = z
+      .object({ current: z.string().max(256), next: z.string().max(256) })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid request" });
+      return;
+    }
+    const username = (req as AuthedRequest).authUser!.username;
+    if (!users.has(username)) {
+      res.status(400).json({ error: "the admin-token login has no password to change" });
+      return;
+    }
+    if (!users.verify(username, parsed.data.current)) {
+      res.status(403).json({ error: "current password is incorrect" });
+      return;
+    }
+    try {
+      users.changePassword(username, parsed.data.next);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
+    audit.log(username, "password.change", username);
+    res.json({ ok: true });
+  });
+
   // Inventory listing with live handshake ages (credentials excluded).
   app.get("/api/routers", requireTech, async (_req: Request, res: Response) => {
     const handshakes = await wg.latestHandshakes().catch(() => ({}) as Record<string, number | null>);
@@ -374,6 +402,38 @@ export function buildApp(deps: AppDeps): Express {
       }
     },
   );
+
+  // On-demand backup: run /export over SSH, capture stdout, store it. Handy
+  // for a snapshot right before a change instead of waiting for the schedule.
+  app.post("/api/routers/:ref/backup-now", requireTech, async (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    if (router.state === "staged" || router.state === "revoked") {
+      res.status(400).json({ error: "router is not online" });
+      return;
+    }
+    try {
+      // RouterOS `/export` with no file= prints the config to stdout.
+      const result = await sshRun(router.tunnelIp, router.username, router.password, "/export");
+      const text = result.output.trim();
+      if (!text) {
+        res.status(502).json({ error: "router returned an empty export" });
+        return;
+      }
+      const { stored, name } = backups.saveIfChanged(router.serialNumber, Buffer.from(text + "\n"));
+      const now = new Date().toISOString();
+      router.lastBackupAt = now;
+      router.lastSeenAt = now;
+      store.save(router);
+      audit.log(who(req), "backup.now", router.serialNumber, stored ? name ?? "" : "unchanged");
+      res.json({ ok: true, stored, name });
+    } catch (err) {
+      res.status(502).json({ error: `backup failed: ${(err as Error).message}` });
+    }
+  });
 
   app.get("/api/routers/:ref/backups", requireTech, (req: Request, res: Response) => {
     const router = store.find(req.params.ref);
@@ -542,6 +602,30 @@ export function buildApp(deps: AppDeps): Express {
     audit.log(who(req), "user.add", parsed.data.username, parsed.data.role);
     // Password is returned exactly once, at creation.
     res.json({ ok: true, username: parsed.data.username, password });
+  });
+
+  // Admin resets another user's password (or generates one). Also ends that
+  // user's active sessions so the new password takes effect everywhere.
+  app.post("/api/users/:username/password", requireAdmin, (req: Request, res: Response) => {
+    const parsed = z.object({ password: z.string().max(256).optional() }).safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid request" });
+      return;
+    }
+    if (!users.has(req.params.username)) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const password = parsed.data.password ?? generatePassword(16);
+    try {
+      users.changePassword(req.params.username, password);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
+    sessions.destroyForUser(req.params.username);
+    audit.log(who(req), "user.reset-password", req.params.username);
+    res.json({ ok: true, username: req.params.username, password });
   });
 
   app.delete("/api/users/:username", requireAdmin, (req: Request, res: Response) => {

@@ -59,6 +59,19 @@ export class UserStore {
     this.persist();
   }
 
+  changePassword(username: string, newPassword: string): void {
+    if (newPassword.length < 8) throw new Error("password must be at least 8 characters");
+    const user = this.users.find((u) => u.username === username);
+    if (!user) throw new Error("no such user");
+    user.salt = crypto.randomBytes(16).toString("hex");
+    user.hash = hashPassword(newPassword, user.salt);
+    this.persist();
+  }
+
+  has(username: string): boolean {
+    return this.users.some((u) => u.username === username);
+  }
+
   remove(username: string): boolean {
     const before = this.users.length;
     this.users = this.users.filter((u) => u.username !== username);

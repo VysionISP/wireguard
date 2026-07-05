@@ -158,6 +158,66 @@ describe("live stats, bulk, diff, restore", () => {
   });
 });
 
+describe("on-demand backup", () => {
+  it("runs /export over SSH and stores the result", async () => {
+    await register("HEXBN", 1);
+    const res = await req("post", "/api/routers/HEXBN/backup-now");
+    expect(res.status).toBe(200);
+    expect(res.body.stored).toBe(true);
+    const list = await req("get", "/api/routers/HEXBN/backups");
+    expect(list.body).toHaveLength(1);
+    // second call with identical output dedupes
+    const again = await req("post", "/api/routers/HEXBN/backup-now");
+    expect(again.body.stored).toBe(false);
+  });
+
+  it("400s for a staged router", async () => {
+    await req("post", "/api/prestage").send({ serialNumber: "HEXBS", label: "x" });
+    expect((await req("post", "/api/routers/HEXBS/backup-now")).status).toBe(400);
+  });
+});
+
+describe("password management", () => {
+  it("a user can change their own password", async () => {
+    users.add("carol", "carolpass1", "tech");
+    const login = await request(app).post("/api/login").send({ username: "carol", password: "carolpass1" });
+    const auth = `Bearer ${login.body.session}`;
+    // wrong current password is rejected
+    expect((await req("post", "/api/account/password", auth).send({ current: "nope", next: "brandnew99" })).status).toBe(403);
+    // correct current password works
+    expect((await req("post", "/api/account/password", auth).send({ current: "carolpass1", next: "brandnew99" })).status).toBe(200);
+    // old password no longer logs in; new one does
+    expect((await request(app).post("/api/login").send({ username: "carol", password: "carolpass1" })).status).toBe(401);
+    expect((await request(app).post("/api/login").send({ username: "carol", password: "brandnew99" })).status).toBe(200);
+  });
+
+  it("the admin-token login has no password to change", async () => {
+    const res = await req("post", "/api/account/password").send({ current: "x", next: "yyyyyyyy" });
+    expect(res.status).toBe(400);
+  });
+
+  it("admin resets another user's password and ends their sessions", async () => {
+    users.add("dave", "davepass1", "tech");
+    const login = await request(app).post("/api/login").send({ username: "dave", password: "davepass1" });
+    const daveAuth = `Bearer ${login.body.session}`;
+    expect((await req("get", "/api/me", daveAuth)).status).toBe(200);
+
+    const reset = await req("post", "/api/users/dave/password").send({});
+    expect(reset.status).toBe(200);
+    expect(reset.body.password).toHaveLength(16);
+    // dave's old session is now dead
+    expect((await req("get", "/api/me", daveAuth)).status).toBe(401);
+    // and the new password logs in
+    expect((await request(app).post("/api/login").send({ username: "dave", password: reset.body.password })).status).toBe(200);
+  });
+
+  it("password reset is admin-only", async () => {
+    users.add("erin", "erinpass1", "tech");
+    const login = await request(app).post("/api/login").send({ username: "erin", password: "erinpass1" });
+    expect((await req("post", "/api/users/erin/password", `Bearer ${login.body.session}`).send({})).status).toBe(403);
+  });
+});
+
 describe("audit log", () => {
   it("records mutating actions", async () => {
     await register("HEXAU", 1);
