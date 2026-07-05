@@ -157,6 +157,11 @@ function renderHardening(cfg: Config, router: RouterRecord): string {
       `:if ([/system/identity/get name] = "MikroTik") do={ /system/identity/set name="${name}" }`,
     );
   }
+  // Ensure account (login) events are captured in the memory log so the
+  // server's device monitor can read them over the tunnel.
+  parts.push(
+    `:if ([:len [/system/logging/find topics~"account"]] = 0) do={ /system/logging/add topics=account action=memory }`,
+  );
   if (parts.length === 0) return "";
   return `# 6. Hardening / base configuration\n${parts.join("\n")}\n\n`;
 }

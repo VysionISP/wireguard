@@ -43,6 +43,67 @@ export async function fetchRouterInfo(
   };
 }
 
+export interface IfaceState {
+  name: string;
+  type: string;
+  running: boolean;
+  disabled: boolean;
+}
+
+export interface LogEntry {
+  id: string;
+  time: string;
+  topics: string;
+  message: string;
+}
+
+export type FetchIfacesFn = typeof fetchInterfaces;
+export type FetchLogFn = typeof fetchLog;
+
+/** Light interface-state read for the device monitor (link up/down). */
+export async function fetchInterfaces(
+  tunnelIp: string,
+  username: string,
+  password: string,
+  timeoutMs = 8000,
+): Promise<IfaceState[]> {
+  const auth = Buffer.from(`${username}:${password}`).toString("base64");
+  const res = await fetch(`http://${tunnelIp}/rest/interface`, {
+    headers: { authorization: `Basic ${auth}` },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`RouterOS REST /interface: ${res.status}`);
+  const raw = (await res.json()) as Array<Record<string, string>>;
+  return raw.map((i) => ({
+    name: i.name ?? "?",
+    type: i.type ?? "?",
+    running: i.running === "true",
+    disabled: i.disabled === "true",
+  }));
+}
+
+/** Recent log entries — used to detect logins. */
+export async function fetchLog(
+  tunnelIp: string,
+  username: string,
+  password: string,
+  timeoutMs = 8000,
+): Promise<LogEntry[]> {
+  const auth = Buffer.from(`${username}:${password}`).toString("base64");
+  const res = await fetch(`http://${tunnelIp}/rest/log`, {
+    headers: { authorization: `Basic ${auth}` },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`RouterOS REST /log: ${res.status}`);
+  const raw = (await res.json()) as Array<Record<string, string>>;
+  return raw.map((l) => ({
+    id: l[".id"] ?? "",
+    time: l.time ?? "",
+    topics: l.topics ?? "",
+    message: l.message ?? "",
+  }));
+}
+
 export interface LiveInterface {
   name: string;
   type: string;

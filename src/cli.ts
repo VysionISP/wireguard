@@ -8,9 +8,12 @@ import { renderBootstrap, renderOneLiner } from "./templates.js";
 import { revokeRouter, verifyRouter } from "./actions.js";
 import { syncPeers } from "./sync.js";
 import { startMonitor } from "./monitor.js";
+import { startDeviceMonitor } from "./devicemonitor.js";
 import { Alerter } from "./alerts.js";
 import { TokenStore } from "./tokens.js";
 import { UserStore } from "./users.js";
+import { IssueStore } from "./issues.js";
+import { EventLog } from "./events.js";
 
 function makeWg(config: Config): WireguardManager {
   return config.wireguard.applyMode === "wg"
@@ -39,8 +42,17 @@ program
     const { applied, failed } = await syncPeers(store, wg);
     if (applied || failed) console.log(`peer sync: ${applied} applied, ${failed} failed`);
     const alerter = new Alerter(config.alerts);
-    const app = buildApp({ config, store, wg, alerter });
-    startMonitor(store, wg, config.monitor.intervalSeconds, config.monitor.offlineAfterSeconds, alerter);
+    const issues = new IssueStore(config.issuesPath);
+    const events = new EventLog(config.eventsPath);
+    const app = buildApp({ config, store, wg, alerter, issues, events });
+    startMonitor(store, wg, config.monitor.intervalSeconds, config.monitor.offlineAfterSeconds, alerter, { issues, events });
+    if (config.deviceMonitor.enabled) {
+      startDeviceMonitor(
+        { store, wg, issues, events, alerter, offlineAfterSeconds: config.monitor.offlineAfterSeconds },
+        config.deviceMonitor.intervalSeconds,
+      );
+      console.log(`device monitor: every ${config.deviceMonitor.intervalSeconds}s (logins + link state)`);
+    }
     if (alerter.enabled) console.log("alerts: enabled");
     app.listen(config.server.port, config.server.host, () => {
       console.log(

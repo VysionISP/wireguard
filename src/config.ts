@@ -112,6 +112,21 @@ const configSchema = z.object({
       suppressMinutes: z.number().int().min(0).default(15),
     })
     .default({}),
+  /** Active per-device monitoring (logins, port link state) over the tunnel. */
+  deviceMonitor: z
+    .object({
+      enabled: z.boolean().default(true),
+      intervalSeconds: z.number().int().min(30).default(120),
+      /** New routers get monitoring on by default with the flags below. */
+      enableNewByDefault: z.boolean().default(true),
+      defaultAlertOnLogin: z.boolean().default(true),
+      defaultAlertOnLinkDown: z.boolean().default(true),
+    })
+    .default({}),
+  /** Active issues (status board). */
+  issuesPath: z.string().default("data/issues.json"),
+  /** Per-device + global event log (logins, link flaps, on/offline). */
+  eventsPath: z.string().default("data/events.jsonl"),
   /** Path of the JSON router inventory. */
   storePath: z.string().default("data/routers.json"),
   /** One-time bootstrap tokens. */

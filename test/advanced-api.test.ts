@@ -7,6 +7,8 @@ import { BackupStore } from "../src/backups.js";
 import { TokenStore } from "../src/tokens.js";
 import { UserStore, SessionManager } from "../src/users.js";
 import { AuditLog } from "../src/audit.js";
+import { IssueStore } from "../src/issues.js";
+import { EventLog } from "../src/events.js";
 import { DryRunManager } from "../src/wireguard.js";
 import { fakeKey, tempDir, testConfig } from "./helpers.js";
 import type { Config } from "../src/config.js";
@@ -16,6 +18,8 @@ let store: RouterStore;
 let tokens: TokenStore;
 let users: UserStore;
 let sessions: SessionManager;
+let issuesStore: IssueStore;
+let eventsStore: EventLog;
 let app: ReturnType<typeof buildApp>;
 
 const sshRun = async (_h: string, _u: string, _p: string, command: string) => ({
@@ -32,6 +36,7 @@ const fetchLive = async () => ({
 
 function build() {
   return buildApp({ config: cfg, store, wg: new DryRunManager("wg0", true), tokens, users, sessions, sshRun, fetchLive, sftpPut,
+    issues: issuesStore, events: eventsStore,
     backups: new BackupStore(path.join(tempDir(), "b"), 5) });
 }
 const A = () => `Bearer ${cfg.auth.adminToken}`;
@@ -48,6 +53,8 @@ beforeEach(() => {
   tokens = new TokenStore(cfg.tokensPath);
   users = new UserStore(cfg.usersPath);
   sessions = new SessionManager(12);
+  issuesStore = new IssueStore(cfg.issuesPath);
+  eventsStore = new EventLog(cfg.eventsPath);
   app = build();
 });
 
@@ -215,6 +222,52 @@ describe("password management", () => {
     users.add("erin", "erinpass1", "tech");
     const login = await request(app).post("/api/login").send({ username: "erin", password: "erinpass1" });
     expect((await req("post", "/api/users/erin/password", `Bearer ${login.body.session}`).send({})).status).toBe(403);
+  });
+});
+
+describe("status board: issues, events, monitoring settings", () => {
+  it("PATCH monitoring sets device type + rules and resets baseline", async () => {
+    await register("MON1", 1);
+    const res = await req("patch", "/api/routers/MON1/monitoring")
+      .send({ deviceType: "infrastructure", enabled: true, alertOnLogin: true, alertOnLinkDown: true });
+    expect(res.status).toBe(200);
+    expect(res.body.deviceType).toBe("infrastructure");
+    const r = store.findBySerial("MON1")!;
+    expect(r.monitoring!.enabled).toBe(true);
+    expect(r.monState!.initialised).toBe(false); // baseline reset
+  });
+
+  it("new routers get customer monitoring by default", async () => {
+    await register("MON2", 2);
+    const r = store.findBySerial("MON2")!;
+    expect(r.deviceType).toBe("customer");
+    expect(r.monitoring!.enabled).toBe(true);
+  });
+
+  it("lists issues with counts and supports ack/resolve", async () => {
+    // seed an issue directly through the shared store
+    issuesStore.open("MON3", "MON3", "offline", "critical", "down");
+    const list = await req("get", "/api/issues");
+    expect(list.body.counts.critical).toBe(1);
+    const id = list.body.issues[0].id;
+    expect((await req("post", `/api/issues/${id}/ack`)).status).toBe(200);
+    expect((await req("post", `/api/issues/${id}/resolve`)).status).toBe(200);
+    expect((await req("get", "/api/issues")).body.counts.critical).toBe(0);
+  });
+
+  it("serves the global and per-router event feed", async () => {
+    eventsStore.add({ at: new Date().toISOString(), serialNumber: "MON4", label: "MON4", type: "login", severity: "info", message: "user admin logged in via ssh" });
+    await register("MON4", 4);
+    expect((await req("get", "/api/events")).body.length).toBeGreaterThan(0);
+    const per = await req("get", "/api/routers/MON4/events");
+    expect(per.body.some((e: any) => e.type === "login")).toBe(true);
+  });
+
+  it("monitoring PATCH is admin-only", async () => {
+    await register("MON5", 5);
+    users.add("techm", "techpass1", "tech");
+    const login = await request(app).post("/api/login").send({ username: "techm", password: "techpass1" });
+    expect((await req("patch", "/api/routers/MON5/monitoring", `Bearer ${login.body.session}`).send({ enabled: false })).status).toBe(403);
   });
 });
 

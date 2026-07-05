@@ -1,7 +1,7 @@
 import type { Config } from "./config.js";
 import type { RouterRecord } from "./types.js";
 
-type AlertEvent = "offline" | "online" | "registered";
+type AlertEvent = "offline" | "online" | "registered" | "login" | "link-down" | "link-up";
 
 export type SendFn = (text: string, event: AlertEvent, router: RouterRecord) => Promise<void>;
 
@@ -73,6 +73,22 @@ export class Alerter {
       ? `🟢 ${routerName(router)} is back online (${router.tunnelIp})`
       : `🔴 ${routerName(router)} went OFFLINE (${router.tunnelIp})`;
     await this.deliver(text, online ? "online" : "offline", router);
+  }
+
+  /**
+   * Generic alert used by the device monitor (logins, link flaps). An
+   * optional suppressKey applies the same flap-guard window as transitions;
+   * omit it (logins) to always deliver.
+   */
+  async custom(router: RouterRecord, text: string, event: AlertEvent, suppressKey?: string): Promise<void> {
+    if (!this.enabled) return;
+    if (suppressKey && this.cfg.suppressMinutes > 0) {
+      const now = Date.now();
+      const windowMs = this.cfg.suppressMinutes * 60_000;
+      if (now - (this.lastSent.get(suppressKey) ?? 0) < windowMs) return;
+      this.lastSent.set(suppressKey, now);
+    }
+    await this.deliver(text, event, router);
   }
 
   async routerRegistered(router: RouterRecord, rereg: boolean): Promise<void> {

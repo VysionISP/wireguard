@@ -15,9 +15,11 @@ import { Alerter } from "./alerts.js";
 import { TokenStore } from "./tokens.js";
 import { UserStore, SessionManager, type Role } from "./users.js";
 import { AuditLog } from "./audit.js";
+import { IssueStore } from "./issues.js";
+import { EventLog } from "./events.js";
 import { fetchLiveStats, type FetchLiveFn } from "./routeros.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
-import type { RouterRecord } from "./types.js";
+import { defaultMonitoring, type RouterRecord, type DeviceType } from "./types.js";
 
 export interface AppDeps {
   config: Config;
@@ -32,6 +34,8 @@ export interface AppDeps {
   users?: UserStore;
   sessions?: SessionManager;
   audit?: AuditLog;
+  issues?: IssueStore;
+  events?: EventLog;
   sshRun?: SshRunFn;
   sftpPut?: SftpPutFn;
 }
@@ -83,6 +87,8 @@ export function buildApp(deps: AppDeps): Express {
   const users = deps.users ?? new UserStore(config.usersPath);
   const sessions = deps.sessions ?? new SessionManager(config.auth.sessionHours);
   const audit = deps.audit ?? new AuditLog(config.auditPath);
+  const issues = deps.issues ?? new IssueStore(config.issuesPath);
+  const events = deps.events ?? new EventLog(config.eventsPath);
   const sshRun = deps.sshRun ?? realSshRun;
   const sftpPut = deps.sftpPut ?? realSftpPut;
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
@@ -163,6 +169,10 @@ export function buildApp(deps: AppDeps): Express {
         router.state = "registered";
         router.updatedAt = now;
         router.lastSeenAt = now;
+        if (!router.deviceType) router.deviceType = "customer";
+        if (!router.monitoring && config.deviceMonitor.enableNewByDefault) {
+          router.monitoring = defaultMonitoring(router.deviceType, config.deviceMonitor.defaultAlertOnLogin, config.deviceMonitor.defaultAlertOnLinkDown);
+        }
         await wg.addPeer(router.publicKey, router.tunnelIp);
       } else if (router) {
         // Re-registration (reset/reflashed device): keep the tunnel IP and
@@ -196,6 +206,10 @@ export function buildApp(deps: AppDeps): Express {
           createdAt: now,
           updatedAt: now,
           lastSeenAt: now,
+          deviceType: "customer",
+          monitoring: config.deviceMonitor.enableNewByDefault
+            ? defaultMonitoring("customer", config.deviceMonitor.defaultAlertOnLogin, config.deviceMonitor.defaultAlertOnLinkDown)
+            : undefined,
         } satisfies RouterRecord;
         await wg.addPeer(router.publicKey, router.tunnelIp);
       }
@@ -492,6 +506,7 @@ export function buildApp(deps: AppDeps): Express {
       return;
     }
     await revokeRouter(store, wg, router);
+    issues.clearSerial(router.serialNumber);
     audit.log(who(req), "revoke", router.serialNumber, router.tunnelIp);
     console.log(`revoked ${router.serialNumber} (${router.tunnelIp}) via web`);
     res.json({ ok: true });
@@ -641,6 +656,81 @@ export function buildApp(deps: AppDeps): Express {
   // ---- audit trail
   app.get("/api/audit", requireAdmin, (_req: Request, res: Response) => {
     res.json(audit.recent(200));
+  });
+
+  // ---- status board: issues + events
+  app.get("/api/issues", requireTech, (req: Request, res: Response) => {
+    const all = req.query.all === "1";
+    res.json({ counts: issues.counts(), issues: issues.list(all) });
+  });
+
+  app.post("/api/issues/:id/ack", requireTech, (req: Request, res: Response) => {
+    if (!issues.ack(req.params.id, who(req))) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    audit.log(who(req), "issue.ack", req.params.id.slice(0, 8));
+    res.json({ ok: true });
+  });
+
+  app.post("/api/issues/:id/resolve", requireTech, (req: Request, res: Response) => {
+    const found = issues.list(true).find((i) => i.id === req.params.id);
+    if (!found) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    issues.resolve(found.serialNumber, found.type);
+    audit.log(who(req), "issue.resolve", found.serialNumber, found.type);
+    res.json({ ok: true });
+  });
+
+  app.get("/api/events", requireTech, (_req: Request, res: Response) => {
+    res.json(events.recent(200));
+  });
+
+  app.get("/api/routers/:ref/events", requireTech, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    res.json(events.forSerial(router.serialNumber, 50));
+  });
+
+  // ---- per-device type + monitoring settings
+  app.patch("/api/routers/:ref/monitoring", requireAdmin, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const parsed = z
+      .object({
+        deviceType: z.enum(["customer", "infrastructure"]).optional(),
+        enabled: z.boolean().optional(),
+        alertOnLogin: z.boolean().optional(),
+        alertOnLinkDown: z.boolean().optional(),
+        watchInterfaces: z.array(z.string().max(64)).max(64).optional(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid request" });
+      return;
+    }
+    const p = parsed.data;
+    if (p.deviceType) router.deviceType = p.deviceType as DeviceType;
+    const mon = router.monitoring ?? defaultMonitoring(router.deviceType ?? "customer", true, true);
+    if (p.enabled !== undefined) mon.enabled = p.enabled;
+    if (p.alertOnLogin !== undefined) mon.alertOnLogin = p.alertOnLogin;
+    if (p.alertOnLinkDown !== undefined) mon.alertOnLinkDown = p.alertOnLinkDown;
+    if (p.watchInterfaces !== undefined) mon.watchInterfaces = p.watchInterfaces;
+    // Changing rules invalidates the detection baseline so we re-learn cleanly.
+    router.monitoring = mon;
+    router.monState = { ifaceRunning: {}, seenLogins: [], initialised: false };
+    router.updatedAt = new Date().toISOString();
+    store.save(router);
+    audit.log(who(req), "monitoring", router.serialNumber, `${router.deviceType} enabled=${mon.enabled}`);
+    res.json({ ok: true, deviceType: router.deviceType, monitoring: mon });
   });
 
   // ---- live stats over the tunnel (system, interfaces, LTE/5G signal)

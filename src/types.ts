@@ -1,5 +1,13 @@
 export type RouterState = "staged" | "registered" | "confirmed" | "verified" | "revoked";
 
+/**
+ * customer       — CPE at a subscriber site. Watch WAN/uplink + logins, pull
+ *                  access stats (LTE/5G signal, uptime).
+ * infrastructure — towers, PoPs, core routers. Watch every port + logins,
+ *                  pull port traffic/throughput.
+ */
+export type DeviceType = "customer" | "infrastructure";
+
 export interface RouterRecord {
   /** Stable internal id (uuid). */
   id: string;
@@ -29,6 +37,44 @@ export interface RouterRecord {
   transitions?: Array<{ at: string; online: boolean }>;
   /** When the router last pushed a config backup that we stored or matched. */
   lastBackupAt?: string | null;
+  /** Classification driving monitoring profile and which stats we pull. */
+  deviceType?: DeviceType;
+  /** Per-device active monitoring rules. Absent = not monitored. */
+  monitoring?: DeviceMonitoring;
+  /** Internal bookkeeping for the device monitor; not user-facing. */
+  monState?: DeviceMonState;
+}
+
+export interface DeviceMonitoring {
+  /** Master switch: poll this device over the tunnel for logins / link state. */
+  enabled: boolean;
+  /** Notify + log when someone logs into the router (Winbox/SSH/WebFig/etc). */
+  alertOnLogin: boolean;
+  /** Notify + raise an issue when a watched port's link drops. */
+  alertOnLinkDown: boolean;
+  /** Ports to watch; empty = auto (all ethernet/SFP ports that were up at first poll). */
+  watchInterfaces: string[];
+}
+
+/** Default monitoring rules for a device type. */
+export function defaultMonitoring(type: DeviceType, alertOnLogin: boolean, alertOnLinkDown: boolean): DeviceMonitoring {
+  return {
+    enabled: true,
+    alertOnLogin,
+    // Infrastructure links are load-bearing — always watch them; a customer's
+    // single uplink dropping is often just the customer's own power/modem.
+    alertOnLinkDown: type === "infrastructure" ? true : alertOnLinkDown,
+    watchInterfaces: [],
+  };
+}
+
+export interface DeviceMonState {
+  /** Last known running state per interface, to detect transitions. */
+  ifaceRunning: Record<string, boolean>;
+  /** Recently-seen login log signatures (bounded) so we don't re-alert. */
+  seenLogins: string[];
+  /** False until the first successful poll establishes a baseline. */
+  initialised: boolean;
 }
 
 export interface RegisterRequest {

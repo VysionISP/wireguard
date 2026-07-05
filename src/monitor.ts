@@ -1,8 +1,15 @@
 import type { RouterStore } from "./store.js";
 import type { WireguardManager } from "./wireguard.js";
 import type { Alerter } from "./alerts.js";
+import type { IssueStore } from "./issues.js";
+import type { EventLog } from "./events.js";
 
 const MAX_TRANSITIONS = 30;
+
+export interface MonitorHooks {
+  issues?: IssueStore;
+  events?: EventLog;
+}
 
 export interface MonitorStats {
   online: number;
@@ -20,6 +27,7 @@ export async function monitorTick(
   wg: WireguardManager,
   offlineAfterSeconds: number,
   alerter?: Alerter,
+  hooks: MonitorHooks = {},
 ): Promise<MonitorStats> {
   const handshakes = await wg.latestHandshakes().catch(() => null);
   if (handshakes === null) return { online: 0, offline: 0, changed: 0 };
@@ -56,6 +64,14 @@ export async function monitorTick(
       alerter?.routerTransition(router, isOnline).catch((err) =>
         console.error(`alert failed: ${(err as Error).message}`),
       );
+      const label = router.label || router.identity || router.serialNumber;
+      if (isOnline) {
+        hooks.issues?.resolve(router.serialNumber, "offline");
+        hooks.events?.add({ at: now, serialNumber: router.serialNumber, label, type: "online", severity: "info", message: `${label} came back online` });
+      } else {
+        hooks.issues?.open(router.serialNumber, label, "offline", "critical", `${label} is offline (no WireGuard handshake)`);
+        hooks.events?.add({ at: now, serialNumber: router.serialNumber, label, type: "offline", severity: "critical", message: `${label} went offline` });
+      }
     }
     if (dirty) store.save(router);
   }
@@ -69,9 +85,10 @@ export function startMonitor(
   intervalSeconds: number,
   offlineAfterSeconds: number,
   alerter?: Alerter,
+  hooks: MonitorHooks = {},
 ): () => void {
   const timer = setInterval(() => {
-    monitorTick(store, wg, offlineAfterSeconds, alerter).catch((err) =>
+    monitorTick(store, wg, offlineAfterSeconds, alerter, hooks).catch((err) =>
       console.error(`monitor: ${(err as Error).message}`),
     );
   }, intervalSeconds * 1000);

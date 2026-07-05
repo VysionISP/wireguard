@@ -173,6 +173,40 @@ up now** button in the same view triggers an immediate `/export` over SSH
 (stored only if the config changed) — handy for a snapshot right before you
 make a change.
 
+## Status board & device monitoring
+
+The dashboard opens on a **Status board**: a live banner (green "all nominal"
+/ amber / red), a list of active issues you can acknowledge or clear, and a
+rolling event feed. A badge on the tab shows the open-issue count.
+
+Beyond the WireGuard-handshake up/down tracking, the server actively polls
+each monitored device over the tunnel (`deviceMonitor.intervalSeconds`,
+default 120 s) and raises:
+
+- **Login events** — someone logging into the router (Winbox / SSH / WebFig /
+  API) produces a notification (via your alert channels) and is logged to that
+  device's event history and the global feed.
+- **Link-down issues** — when a watched port's link drops, an issue opens and
+  an alert fires; it auto-clears when the link returns.
+
+Detection is baselined on the first poll (so existing history and current link
+state don't fire spurious alerts) and state is stored per device, so it
+survives restarts and never double-fires. Provisioned routers get a RouterOS
+`account`-topic logging rule so login events are always captured.
+
+### Device types
+
+Each router is classed as **customer** (CPE — watch the uplink + logins, pull
+access stats like LTE/5G signal) or **infrastructure** (towers/PoPs/core —
+watch every port + logins, pull port traffic). Set it per device in the
+details view; it drives the default monitoring profile (infrastructure always
+watches link state, since those links are load-bearing) and which live stats
+the dashboard emphasises. New routers default to customer with monitoring on.
+
+Per-device monitoring is fully configurable in the details view (admin):
+device type, master on/off, alert-on-login, alert-on-link-down, and which
+ports to watch (blank = auto: ethernet/SFP/LTE ports up at first poll).
+
 ## Fleet monitoring
 
 The server checks every router's WireGuard handshake in the background
@@ -261,6 +295,10 @@ require the admin role.
 | `GET/POST/DELETE /api/tokens` | admin | Manage one-time bootstrap tokens |
 | `GET/POST/DELETE /api/users` | admin | Manage dashboard users |
 | `GET /api/audit` | admin | Recent audit entries |
+| `GET /api/issues` | tech | Active issues + counts (status board) |
+| `POST /api/issues/:id/ack` / `…/resolve` | tech | Acknowledge / clear an issue |
+| `GET /api/events` / `/api/routers/:ref/events` | tech | Global / per-device event feed |
+| `PATCH /api/routers/:ref/monitoring` | admin | Set device type + monitoring rules |
 | `GET /api/bootstrap-info` | tech | The tech-facing bootstrap one-liner |
 | `POST /api/backup?token&serial` | provisioning token (query) | Router-pushed config backup |
 | `GET /healthz` | none | Liveness |

@@ -49,8 +49,17 @@
     "notifyOnline": true,
     "suppressMinutes": 15
   },
+  "deviceMonitor": {
+    "enabled": true,
+    "intervalSeconds": 120,
+    "enableNewByDefault": true,
+    "defaultAlertOnLogin": true,
+    "defaultAlertOnLinkDown": true
+  },
   "storePath": "data/routers.json",
   "tokensPath": "data/tokens.json",
   "usersPath": "data/users.json",
-  "auditPath": "data/audit.jsonl"
+  "auditPath": "data/audit.jsonl",
+  "issuesPath": "data/issues.json",
+  "eventsPath": "data/events.jsonl"
 }

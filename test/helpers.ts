@@ -29,6 +29,8 @@ export function testConfig(overrides: Partial<Record<string, unknown>> = {}): Co
     tokensPath: path.join(tempDir(), "tokens.json"),
     usersPath: path.join(tempDir(), "users.json"),
     auditPath: path.join(tempDir(), "audit.jsonl"),
+    issuesPath: path.join(tempDir(), "issues.json"),
+    eventsPath: path.join(tempDir(), "events.jsonl"),
     ...overrides,
   });
 }
