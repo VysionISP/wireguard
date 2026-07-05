@@ -59,9 +59,24 @@ export function renderBootstrap(cfg: Config, tokenOverride?: string): string {
     /file/remove [find name="wg-provision.rsc"]
     :log info "wg-provision: bootstrap complete"
 } on-error={
-    :log error "wg-provision: registration failed - check connectivity to ${url}"
+    :log error "wg-provision: registration failed"
+    # Ask the server WHY, and print it on the terminal.
+    :do {
+        /tool fetch url=("${url}/api/register-reason?token=${token}&serial=" . \$serial) dst-path="wg-reason.rsc"${cert}
+        :delay 1s
+        /import file-name=wg-reason.rsc
+        /file/remove [find name="wg-reason.rsc"]
+    } on-error={
+        :put "wg-provision: registration FAILED and the reason could not be retrieved - check connectivity to ${url}"
+    }
 }
 `;
+}
+
+/** A tiny RSC the router imports to print, on the CLI, why provisioning failed. */
+export function renderReason(reason: string): string {
+  const m = rosQuote(reason);
+  return `:log error "wg-provision: ${m}"\n:put "\\n=== WG-PROVISION FAILED ===\\n${m}\\n"\n`;
 }
 
 /**

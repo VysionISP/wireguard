@@ -125,6 +125,24 @@ describe("GET /bootstrap.rsc", () => {
   });
 });
 
+describe("GET /api/register-reason", () => {
+  it("explains an unrecognised token", async () => {
+    const res = await request(app).get("/api/register-reason?token=nope&serial=HEX0001");
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("not recognised");
+    expect(res.text).toContain("WG-PROVISION FAILED");
+  });
+
+  it("explains a revoked serial", async () => {
+    await register();
+    const router = store.findBySerial("HEX0001")!;
+    router.state = "revoked";
+    store.save(router);
+    const res = await request(app).get("/api/register-reason?token=nope&serial=HEX0001");
+    expect(res.text).toContain("has been revoked");
+  });
+});
+
 describe("GET /api/routers", () => {
   it("requires the admin token and never leaks passwords", async () => {
     await register();

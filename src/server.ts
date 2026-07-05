@@ -8,7 +8,7 @@ import type { RouterStore } from "./store.js";
 import type { WireguardManager } from "./wireguard.js";
 import { isValidWgKey } from "./wireguard.js";
 import { allocateIp } from "./ipam.js";
-import { renderBootstrap, renderOneLiner, renderProvision } from "./templates.js";
+import { renderBootstrap, renderOneLiner, renderProvision, renderReason } from "./templates.js";
 import { revokeRouter, verifyRouter, type FetchInfoFn } from "./actions.js";
 import { BackupStore } from "./backups.js";
 import { Alerter } from "./alerts.js";
@@ -145,6 +145,32 @@ export function buildApp(deps: AppDeps): Express {
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true });
+  });
+
+  // Explain, in plain English, why a registration attempt failed. The bootstrap
+  // script fetches this on-error and imports it so the reason is printed on the
+  // RouterOS terminal (a /tool fetch of /api/register discards the body on a
+  // non-2xx status, so the router can never see the register response itself).
+  // No auth: it only reveals why a token/serial was rejected, nothing sensitive.
+  function registrationReason(token: string, serial: string): string {
+    const rec = serial ? store.findBySerial(serial) : undefined;
+    if (rec?.state === "revoked")
+      return `router serial ${serial} has been revoked - remove it in the dashboard before re-provisioning`;
+    if (config.auth.allowMasterProvisioningToken && tokenEquals(token, config.auth.provisioningToken))
+      return "the token is valid - the failure was server- or network-side; check the server log (journalctl -u mtprov)";
+    const t = tokens.find(token);
+    if (!t) return "this bootstrap token is not recognised - generate a fresh link for this router";
+    if (t.expiresAt && Date.parse(t.expiresAt) < Date.now())
+      return "this bootstrap token has expired - generate a fresh link for this router";
+    if (t.usedBySerial && t.usedBySerial !== serial)
+      return `this bootstrap token was already used by another device (serial ${t.usedBySerial}) - one token onboards one router, so generate a fresh link for this one`;
+    return "the token is valid - the failure was server- or network-side; check the server log (journalctl -u mtprov)";
+  }
+
+  app.get("/api/register-reason", (req: Request, res: Response) => {
+    const token = String(req.query.token ?? "");
+    const serial = String(req.query.serial ?? "");
+    res.type("text/plain").send(renderReason(registrationReason(token, serial)));
   });
 
   // The bootstrap script a tech fetches onto a fresh router. Accepts the
