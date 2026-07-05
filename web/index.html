@@ -900,12 +900,19 @@ function renderLinks() {
     const dx = b.x - a.x, dy = b.y - a.y;
     const len = Math.hypot(dx, dy) || 1;
     const ux = dx / len, uy = dy / len;
-    const off = Math.min(48, len / 2 - 14); // port label sits this far from each node, never past middle
+    // Distance from a node's centre to its box edge along the link direction,
+    // so the port label clears the (120×52) node box instead of hiding under it.
+    const HALF_W = 62, HALF_H = 30;
+    const edge = Math.min(
+      Math.abs(ux) < 1e-3 ? Infinity : HALF_W / Math.abs(ux),
+      Math.abs(uy) < 1e-3 ? Infinity : HALF_H / Math.abs(uy),
+    );
+    const off = Math.min(edge + 14, Math.max(edge + 2, len - 18));
     const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
     parts.push(`<line class="${hot}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"></line>`);
-    // port names towards each device
-    parts.push(svgLabel(a.x + ux * off, a.y + uy * off - 6, esc(l.aIface || "?"), "port"));
-    parts.push(svgLabel(b.x - ux * off, b.y - uy * off - 6, esc(l.bIface || "?"), "port"));
+    // port names just outside each device
+    parts.push(svgLabel(a.x + ux * off, a.y + uy * off - 4, esc(l.aIface || "?"), "port"));
+    parts.push(svgLabel(b.x - ux * off, b.y - uy * off - 4, esc(l.bIface || "?"), "port"));
     // speed in the middle (click to remove the link)
     parts.push(svgLabel(mx, my - 6, bps ? fmtBps(bps) : "—", "speed", esc(l.id)));
   }
