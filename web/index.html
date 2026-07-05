@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MikroTik WireGuard Provisioning</title>
+<style>
+  :root {
+    --bg: #0f141a; --panel: #161d26; --panel2: #1c2530; --border: #2a3644;
+    --text: #e6edf3; --muted: #8b98a5; --accent: #4da3ff;
+    --green: #3fb950; --amber: #d29922; --blue: #58a6ff; --red: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 24px 20px 60px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  h1 small { color: var(--muted); font-weight: 400; }
+  header .spacer { flex: 1; }
+  button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 12px; cursor: pointer; font: inherit; font-size: 13px;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1f6feb; border-color: #1f6feb; }
+  button.danger:hover { border-color: var(--red); color: var(--red); }
+  button:disabled { opacity: .5; cursor: default; }
+
+  .cards { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 16px; min-width: 110px;
+  }
+  .card .num { font-size: 22px; font-weight: 600; }
+  .card .lbl { color: var(--muted); font-size: 12px; }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px 10px; white-space: nowrap; }
+  th:first-child, td:first-child { padding-left: 16px; }
+  th:last-child, td:last-child { padding-right: 16px; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; border-bottom: 1px solid var(--border); }
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--panel2); }
+  td.actions { text-align: right; }
+  td.actions button { margin-left: 5px; padding: 3px 9px; font-size: 12px; }
+
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; border: 1px solid; }
+  .pill.registered { color: var(--amber); border-color: var(--amber); }
+  .pill.confirmed { color: var(--blue); border-color: var(--blue); }
+  .pill.verified { color: var(--green); border-color: var(--green); }
+  .pill.revoked { color: var(--red); border-color: var(--red); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
+  .dot.on { background: var(--green); } .dot.off { background: #444c56; }
+
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .empty { padding: 32px 16px; text-align: center; color: var(--muted); }
+
+  .boot { display: flex; gap: 10px; align-items: center; padding: 12px 16px; }
+  .boot code {
+    flex: 1; overflow-x: auto; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; white-space: nowrap; display: block;
+  }
+
+  dialog {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 0; max-width: 560px; width: calc(100vw - 40px);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  dialog .dhead { display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  dialog .dhead h3 { margin: 0; font-size: 15px; flex: 1; }
+  dialog .dbody { padding: 8px 18px 18px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; padding: 10px 0; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-all; }
+  .cred { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-top: 8px; }
+  .cred .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .cred .row span:first-child { color: var(--muted); width: 80px; }
+  .cred .row code { flex: 1; }
+
+  #login { max-width: 360px; margin: 12vh auto 0; }
+  #login .panel { padding: 24px; }
+  #login h1 { margin-bottom: 16px; }
+  #login input {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 8px 10px; font: inherit; margin: 8px 0 14px;
+  }
+  #login .err { color: var(--red); font-size: 13px; min-height: 18px; }
+
+  #toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 18px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw;
+  }
+  #toast.show { opacity: 1; }
+  .hidden { display: none !important; }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa; --panel: #ffffff; --panel2: #eef1f4; --border: #d0d7de;
+      --text: #1f2328; --muted: #59636e;
+    }
+    .dot.off { background: #c4ccd4; }
+  }
+</style>
+</head>
+<body>
+
+<div id="login" class="hidden">
+  <div class="panel">
+    <h1>WireGuard Provisioning</h1>
+    <label for="tokenInput">Admin token <span style="color:var(--muted)">(auth.adminToken in config.json)</span></label>
+    <input id="tokenInput" type="password" autocomplete="current-password" placeholder="admin token">
+    <div class="err" id="loginErr"></div>
+    <button class="primary" id="loginBtn">Sign in</button>
+  </div>
+</div>
+
+<div id="app" class="wrap hidden">
+  <header>
+    <h1>MikroTik fleet <small id="refreshed"></small></h1>
+    <div class="spacer"></div>
+    <button id="reloadBtn">Refresh</button>
+    <button id="logoutBtn">Sign out</button>
+  </header>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="panel" style="margin-bottom:20px">
+    <h2>Routers</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>Tunnel</th><th>Serial</th><th>Identity</th><th>Board</th>
+          <th>Mgmt IP</th><th>State</th><th>Handshake</th><th>Last seen</th><th></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty hidden" id="empty">No routers yet — run the bootstrap one-liner below on a fresh device.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Bootstrap a new router</h2>
+    <div class="boot">
+      <code class="mono" id="oneliner">…</code>
+      <button id="copyBoot">Copy</button>
+    </div>
+  </div>
+</div>
+
+<dialog id="details">
+  <div class="dhead"><h3 id="dTitle"></h3><button onclick="document.getElementById('details').close()">Close</button></div>
+  <div class="dbody" id="dBody"></div>
+</dialog>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let token = localStorage.getItem("mtprov.token") || "";
+let timer = null;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), 3500);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { authorization: "Bearer " + token, ...(opts.headers || {}) },
+  });
+  if (res.status === 401) { showLogin("Invalid or expired token"); throw new Error("unauthorized"); }
+  if (!res.ok) {
+    let msg = res.status + " " + res.statusText;
+    try { msg = (await res.json()).error || msg; } catch {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+function showLogin(err) {
+  clearInterval(timer);
+  $("app").classList.add("hidden");
+  $("login").classList.remove("hidden");
+  $("loginErr").textContent = err || "";
+  $("tokenInput").focus();
+}
+
+function fmtAge(sec) {
+  if (sec == null) return "—";
+  if (sec < 90) return sec + "s ago";
+  if (sec < 5400) return Math.round(sec / 60) + "m ago";
+  if (sec < 129600) return Math.round(sec / 3600) + "h ago";
+  return Math.round(sec / 86400) + "d ago";
+}
+function fmtDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString() + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+const online = (r) => r.handshakeAge != null && r.handshakeAge < 180;
+
+function render(routers) {
+  const active = routers.filter((r) => r.state !== "revoked");
+  const counts = {
+    total: active.length,
+    online: routers.filter(online).length,
+    verified: active.filter((r) => r.state === "verified").length,
+    revoked: routers.filter((r) => r.state === "revoked").length,
+  };
+  $("cards").innerHTML = [
+    ["Routers", counts.total], ["Online", counts.online],
+    ["Verified", counts.verified], ["Revoked", counts.revoked],
+  ].map(([l, n]) => `<div class="card"><div class="num">${n}</div><div class="lbl">${l}</div></div>`).join("");
+
+  $("empty").classList.toggle("hidden", routers.length > 0);
+  $("rows").innerHTML = routers.map((r) => `
+    <tr>
+      <td><span class="dot ${online(r) ? "on" : "off"}"></span>${online(r) ? "up" : "down"}</td>
+      <td class="mono">${esc(r.serialNumber)}</td>
+      <td>${esc(r.identity)}</td>
+      <td>${esc(r.boardName)}</td>
+      <td class="mono">${esc(r.tunnelIp)}</td>
+      <td><span class="pill ${esc(r.state)}">${esc(r.state)}</span></td>
+      <td>${fmtAge(r.handshakeAge)}</td>
+      <td>${fmtDate(r.lastSeenAt)}</td>
+      <td class="actions">
+        <button data-act="details" data-ref="${esc(r.id)}">Details</button>
+        <button data-act="verify" data-ref="${esc(r.id)}" ${r.state === "revoked" ? "disabled" : ""}>Verify</button>
+        <button class="danger" data-act="revoke" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" ${r.state === "revoked" ? "disabled" : ""}>Revoke</button>
+      </td>
+    </tr>`).join("");
+}
+
+async function load() {
+  const [routers, boot] = await Promise.all([api("/api/routers"), api("/api/bootstrap-info")]);
+  render(routers);
+  $("oneliner").textContent = boot.oneLiner;
+  $("refreshed").textContent = "updated " + new Date().toLocaleTimeString();
+}
+
+async function start() {
+  try { await load(); } catch (e) { if (e.message !== "unauthorized") toast(e.message); return; }
+  $("login").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  clearInterval(timer);
+  timer = setInterval(() => { if (!document.hidden) load().catch(() => {}); }, 15000);
+}
+
+async function copy(text, what) {
+  try { await navigator.clipboard.writeText(text); toast(what + " copied"); }
+  catch { toast("Copy failed — select it manually"); }
+}
+
+async function openDetails(ref) {
+  const r = await api("/api/routers/" + encodeURIComponent(ref));
+  $("dTitle").textContent = r.serialNumber + " — " + r.identity;
+  $("dBody").innerHTML = `
+    <dl class="kv">
+      <dt>State</dt><dd><span class="pill ${esc(r.state)}">${esc(r.state)}</span></dd>
+      <dt>Board</dt><dd>${esc(r.boardName)} (ROS ${esc(r.rosVersion)})</dd>
+      <dt>Mgmt IP</dt><dd class="mono">${esc(r.tunnelIp)}</dd>
+      <dt>Public key</dt><dd class="mono">${esc(r.publicKey)}</dd>
+      <dt>Handshake</dt><dd>${fmtAge(r.handshakeAge)}</dd>
+      <dt>Registered</dt><dd>${fmtDate(r.createdAt)}</dd>
+      <dt>Last seen</dt><dd>${fmtDate(r.lastSeenAt)}</dd>
+    </dl>
+    <div class="cred">
+      <div class="row"><span>ssh</span><code class="mono">ssh ${esc(r.username)}@${esc(r.tunnelIp)}</code>
+        <button data-copy="ssh ${esc(r.username)}@${esc(r.tunnelIp)}">Copy</button></div>
+      <div class="row"><span>user</span><code class="mono">${esc(r.username)}</code>
+        <button data-copy="${esc(r.username)}">Copy</button></div>
+      <div class="row"><span>password</span><code class="mono">••••••••</code>
+        <button data-copy="${esc(r.password)}">Copy</button></div>
+      <div class="row"><span>REST</span><code class="mono">http://${esc(r.tunnelIp)}/rest/</code>
+        <button data-copy="http://${esc(r.tunnelIp)}/rest/">Copy</button></div>
+    </div>`;
+  $("details").showModal();
+}
+
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button");
+  if (!btn) return;
+  if (btn.dataset.copy != null) return copy(btn.dataset.copy, "Value");
+  const { act, ref } = btn.dataset;
+  if (!act) return;
+  try {
+    if (act === "details") await openDetails(ref);
+    if (act === "verify") {
+      btn.disabled = true; btn.textContent = "…";
+      const v = await api("/api/routers/" + encodeURIComponent(ref) + "/verify", { method: "POST" });
+      toast(v.reachable
+        ? `Reachable: ${v.info.identity} (ROS ${v.info.version}, up ${v.info.uptime})`
+        : `Not reachable: ${v.error}`);
+      await load();
+    }
+    if (act === "revoke") {
+      if (!confirm(`Revoke ${btn.dataset.serial}? Its tunnel drops and it can never re-register.`)) return;
+      await api("/api/routers/" + encodeURIComponent(ref) + "/revoke", { method: "POST" });
+      toast("Revoked " + btn.dataset.serial);
+      await load();
+    }
+  } catch (e) {
+    if (e.message !== "unauthorized") toast(e.message);
+  } finally {
+    if (act === "verify") { btn.disabled = false; btn.textContent = "Verify"; }
+  }
+});
+
+$("loginBtn").addEventListener("click", () => {
+  token = $("tokenInput").value.trim();
+  localStorage.setItem("mtprov.token", token);
+  start();
+});
+$("tokenInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("loginBtn").click(); });
+$("logoutBtn").addEventListener("click", () => {
+  localStorage.removeItem("mtprov.token"); token = ""; showLogin();
+});
+$("reloadBtn").addEventListener("click", () => load().catch((e) => toast(e.message)));
+$("copyBoot").addEventListener("click", () => copy($("oneliner").textContent, "Bootstrap one-liner"));
+
+if (token) start(); else showLogin();
+</script>
+</body>
+</html>

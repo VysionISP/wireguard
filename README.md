@@ -87,6 +87,19 @@ node dist/cli.js verify <serial>               # checks handshake + REST over th
 node dist/cli.js revoke <serial>               # removes the peer, blocks re-registration
 ```
 
+## Web UI
+
+The server also serves a dashboard at `http://<server>:8442/` (same port as
+the API). Sign in with `auth.adminToken` from `config.json`. It shows the
+fleet with live tunnel status (WireGuard handshake age, auto-refreshing every
+15 s), per-router details including management credentials with copy buttons,
+Verify (REST check over the tunnel) and Revoke actions, and the bootstrap
+one-liner ready to copy for field techs.
+
+The dashboard talks to the admin API below; anything it does you can also
+script. If you expose it beyond localhost, put it behind the same HTTPS
+reverse proxy as the provisioning endpoints.
+
 ## Configuration (`config.json`)
 
 | Key | Meaning |
@@ -113,7 +126,12 @@ node dist/cli.js revoke <serial>               # removes the peer, blocks re-reg
 | `GET /bootstrap.rsc?token=…` | provisioning token | The generic bootstrap script |
 | `POST /api/register` | provisioning token (body) | Router phone-home; responds with a tailored `.rsc` |
 | `POST /api/confirm` | provisioning token (body) | Router confirms the config was applied |
-| `GET /api/routers` | `Bearer` admin token | Inventory (passwords excluded) |
+| `GET /` | none (UI does client-side auth) | Web dashboard |
+| `GET /api/routers` | `Bearer` admin token | Inventory with handshake ages (passwords excluded) |
+| `GET /api/routers/:ref` | `Bearer` admin token | Full details incl. credentials (ref = id, serial or tunnel IP) |
+| `POST /api/routers/:ref/verify` | `Bearer` admin token | Handshake + REST reachability check; marks `verified` |
+| `POST /api/routers/:ref/revoke` | `Bearer` admin token | Remove peer, block re-registration |
+| `GET /api/bootstrap-info` | `Bearer` admin token | The tech-facing bootstrap one-liner |
 | `GET /healthz` | none | Liveness |
 
 Router lifecycle: `registered → confirmed → verified` (via `verify`), or `revoked`.

@@ -5,7 +5,7 @@ import { RouterStore } from "./store.js";
 import { buildApp } from "./server.js";
 import { DryRunManager, WgCommandManager, type WireguardManager } from "./wireguard.js";
 import { renderBootstrap, renderOneLiner } from "./templates.js";
-import { fetchRouterInfo } from "./routeros.js";
+import { revokeRouter, verifyRouter } from "./actions.js";
 import { syncPeers } from "./sync.js";
 
 function makeWg(config: Config): WireguardManager {
@@ -106,21 +106,17 @@ program
       process.exitCode = 1;
       return;
     }
-    const handshake = await wg.latestHandshake(router.publicKey).catch(() => null);
+    const result = await verifyRouter(store, wg, router);
     console.log(
-      handshake === null
+      result.handshakeAge === null
         ? "handshake: none recorded"
-        : `handshake: ${handshake}s ago`,
+        : `handshake: ${result.handshakeAge}s ago`,
     );
-    try {
-      const info = await fetchRouterInfo(router.tunnelIp, router.username, router.password);
+    if (result.reachable && result.info) {
+      const { info } = result;
       console.log(`reachable: yes — ${info.identity} (${info.boardName}, ROS ${info.version}, up ${info.uptime})`);
-      router.state = "verified";
-      router.lastSeenAt = new Date().toISOString();
-      router.updatedAt = router.lastSeenAt;
-      store.save(router);
-    } catch (err) {
-      console.error(`reachable: no — ${(err as Error).message}`);
+    } else {
+      console.error(`reachable: no — ${result.error}`);
       process.exitCode = 1;
     }
   });
@@ -146,12 +142,7 @@ program
       process.exitCode = 1;
       return;
     }
-    await wg.removePeer(router.publicKey).catch((err: Error) => {
-      console.warn(`peer removal: ${err.message} (continuing)`);
-    });
-    router.state = "revoked";
-    router.updatedAt = new Date().toISOString();
-    store.save(router);
+    await revokeRouter(store, wg, router);
     console.log(`revoked ${router.serialNumber} (${router.tunnelIp})`);
   });
 

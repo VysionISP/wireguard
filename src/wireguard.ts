@@ -14,6 +14,20 @@ export interface WireguardManager {
   removePeer(publicKey: string): Promise<void>;
   /** Seconds since the last handshake, or null if the peer never connected. */
   latestHandshake(publicKey: string): Promise<number | null>;
+  /** Handshake age in seconds for every peer on the interface, keyed by public key. */
+  latestHandshakes(): Promise<Record<string, number | null>>;
+}
+
+function parseHandshakes(stdout: string): Record<string, number | null> {
+  const now = Math.floor(Date.now() / 1000);
+  const out: Record<string, number | null> = {};
+  for (const line of stdout.split("\n")) {
+    const [key, ts] = line.trim().split(/\s+/);
+    if (!key) continue;
+    const epoch = Number(ts);
+    out[key] = epoch ? Math.max(0, now - epoch) : null;
+  }
+  return out;
 }
 
 /** Applies peers live on this host using the `wg` command. */
@@ -45,16 +59,13 @@ export class WgCommandManager implements WireguardManager {
 
   async latestHandshake(publicKey: string): Promise<number | null> {
     this.assertKey(publicKey);
+    const all = await this.latestHandshakes();
+    return all[publicKey] ?? null;
+  }
+
+  async latestHandshakes(): Promise<Record<string, number | null>> {
     const { stdout } = await execFileAsync("wg", ["show", this.iface, "latest-handshakes"]);
-    for (const line of stdout.split("\n")) {
-      const [key, ts] = line.trim().split(/\s+/);
-      if (key === publicKey) {
-        const epoch = Number(ts);
-        if (!epoch) return null;
-        return Math.max(0, Math.floor(Date.now() / 1000) - epoch);
-      }
-    }
-    return null;
+    return parseHandshakes(stdout);
   }
 }
 
@@ -79,5 +90,9 @@ export class DryRunManager implements WireguardManager {
 
   async latestHandshake(): Promise<number | null> {
     return null;
+  }
+
+  async latestHandshakes(): Promise<Record<string, number | null>> {
+    return {};
   }
 }

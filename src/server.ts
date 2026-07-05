@@ -1,19 +1,26 @@
 import crypto from "node:crypto";
-import express, { type Express, type Request, type Response } from "express";
+import { fileURLToPath } from "node:url";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
 import type { Config } from "./config.js";
 import type { RouterStore } from "./store.js";
 import type { WireguardManager } from "./wireguard.js";
 import { isValidWgKey } from "./wireguard.js";
 import { allocateIp } from "./ipam.js";
-import { renderBootstrap, renderProvision } from "./templates.js";
+import { renderBootstrap, renderOneLiner, renderProvision } from "./templates.js";
+import { revokeRouter, verifyRouter, type FetchInfoFn } from "./actions.js";
 import type { RouterRecord } from "./types.js";
 
 export interface AppDeps {
   config: Config;
   store: RouterStore;
   wg: WireguardManager;
+  /** Override for tests; defaults to the real RouterOS REST client. */
+  fetchInfo?: FetchInfoFn;
 }
+
+// Works from both src/ (tsx dev) and dist/ (build) — web/ sits beside them.
+const WEB_INDEX = fileURLToPath(new URL("../web/index.html", import.meta.url));
 
 const registerSchema = z.object({
   token: z.string(),
@@ -157,17 +164,69 @@ export function buildApp(deps: AppDeps): Express {
     res.json({ ok: true });
   });
 
-  // Admin: inventory listing (credentials excluded; use the CLI on-host for those).
-  app.get("/api/routers", (req: Request, res: Response) => {
+  // ------------------------------------------------------- admin API + UI
+
+  const requireAdmin = (req: Request, res: Response, next: NextFunction): void => {
     const auth = req.get("authorization") ?? "";
     const token = auth.replace(/^Bearer\s+/i, "");
     if (!tokenEquals(token, config.auth.adminToken)) {
       res.status(401).json({ error: "unauthorized" });
       return;
     }
+    next();
+  };
+
+  // Inventory listing with live handshake ages (credentials excluded).
+  app.get("/api/routers", requireAdmin, async (_req: Request, res: Response) => {
+    const handshakes = await wg.latestHandshakes().catch(() => ({}) as Record<string, number | null>);
     res.json(
-      store.list().map(({ password: _password, ...rest }) => rest),
+      store.list().map(({ password: _password, ...rest }) => ({
+        ...rest,
+        handshakeAge: handshakes[rest.publicKey] ?? null,
+      })),
     );
+  });
+
+  // Full details for one router, credentials included.
+  app.get("/api/routers/:ref", requireAdmin, async (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const handshakeAge = await wg.latestHandshake(router.publicKey).catch(() => null);
+    res.json({ ...router, handshakeAge });
+  });
+
+  app.post("/api/routers/:ref/verify", requireAdmin, async (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    res.json(await verifyRouter(store, wg, router, deps.fetchInfo));
+  });
+
+  app.post("/api/routers/:ref/revoke", requireAdmin, async (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    await revokeRouter(store, wg, router);
+    console.log(`revoked ${router.serialNumber} (${router.tunnelIp}) via web`);
+    res.json({ ok: true });
+  });
+
+  // The tech-facing bootstrap one-liner, for display in the UI.
+  app.get("/api/bootstrap-info", requireAdmin, (_req: Request, res: Response) => {
+    res.json({ oneLiner: renderOneLiner(config) });
+  });
+
+  // The dashboard itself. Static, self-contained; auth happens client-side
+  // against the admin API, so serving the shell is harmless.
+  app.get("/", (_req: Request, res: Response) => {
+    res.sendFile(WEB_INDEX);
   });
 
   return app;
