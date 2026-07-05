@@ -800,6 +800,7 @@ async function loadCustomers() {
     <td>${esc(c.name)}</td><td>${esc(c.contact || "—")}</td><td class="mono">${esc(c.phone || "—")}</td>
     <td>${c.count}</td>
     <td class="actions">
+      <button data-custadd="${esc(c.name)}">Add device</button>
       <button data-custedit="${esc(c.name)}">Edit</button>
       <button class="danger" data-custdel="${esc(c.name)}">Delete</button>
     </td></tr>`).join("");
@@ -952,16 +953,16 @@ async function loadGroup(name) {
   renderMap();
   startMapStream(name);
 }
-async function addDeviceToCustomer() {
-  if (!mapState.group) return toast("Select a customer first");
+async function addDeviceToCustomer(customerName) {
+  const target = customerName || mapState.group;
+  if (!target) return toast("Select a customer first");
   const all = await api("/api/routers");
-  const inGroup = new Set(mapState.routers.map((r) => r.id));
-  const avail = all.filter((r) => !inGroup.has(r.id) && r.state !== "revoked" && r.state !== "staged");
-  if (!avail.length) return toast("No other devices to add");
-  $("mTitle").textContent = "Add device to " + mapState.group;
+  const avail = all.filter((r) => (r.customerGroup || "") !== target && r.state !== "revoked" && r.state !== "staged");
+  if (!avail.length) return toast("No available devices to add");
+  $("mTitle").textContent = "Add device to " + target;
   $("mBody").innerHTML = `<div class="backlist">${avail.map((r) => `
     <div class="brow">
-      <button class="linkish" data-adddev="${esc(r.id)}">${esc(r.label || r.identity || r.serialNumber)}</button>
+      <button class="linkish" data-adddev="${esc(r.id)}" data-addto="${esc(target)}">${esc(r.label || r.identity || r.serialNumber)}</button>
       <span class="chips">${esc(r.serialNumber)} · ${r.customerGroup ? "in " + esc(r.customerGroup) : "unassigned"}</span>
     </div>`).join("")}</div>`;
   $("modal").showModal();
@@ -1764,14 +1765,17 @@ document.addEventListener("click", async (ev) => {
   if (d.tkdel != null) { if (confirm("Delete this token?")) { await api("/api/tokens/" + encodeURIComponent(d.tkdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadTokens(); } return; }
   if (d.usdel != null) { if (confirm(`Remove user ${d.usdel}?`)) { await api("/api/users/" + encodeURIComponent(d.usdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadUsers(); } return; }
   if (d.usreset != null) { return resetUserPassword(d.usreset); }
+  if (d.custadd != null) { return addDeviceToCustomer(d.custadd).catch((e) => toast(e.message)); }
   if (d.custedit != null) { return editCustomer(d.custedit); }
   if (d.custdel != null) { if (confirm(`Delete customer "${d.custdel}"? Devices are unassigned and its map is cleared.`)) { await api("/api/customers/" + encodeURIComponent(d.custdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadCustomers(); } return; }
   if (d.adddev != null) {
+    const target = d.addto || mapState.group;
     try {
-      await api("/api/routers/" + encodeURIComponent(d.adddev), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ customerGroup: mapState.group }) });
+      await api("/api/routers/" + encodeURIComponent(d.adddev), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ customerGroup: target }) });
       $("modal").close();
-      await loadGroup(mapState.group);
-      toast("Device added to " + mapState.group);
+      if (curTab() === "map" && mapState.group === target) await loadGroup(target);
+      if (curTab() === "settings") loadCustomers();
+      toast("Device added to " + target);
     } catch (e) { toast(e.message); }
     return;
   }
