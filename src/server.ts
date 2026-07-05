@@ -9,6 +9,7 @@ import { isValidWgKey } from "./wireguard.js";
 import { allocateIp } from "./ipam.js";
 import { renderBootstrap, renderOneLiner, renderProvision } from "./templates.js";
 import { revokeRouter, verifyRouter, type FetchInfoFn } from "./actions.js";
+import { BackupStore } from "./backups.js";
 import type { RouterRecord } from "./types.js";
 
 export interface AppDeps {
@@ -17,6 +18,7 @@ export interface AppDeps {
   wg: WireguardManager;
   /** Override for tests; defaults to the real RouterOS REST client. */
   fetchInfo?: FetchInfoFn;
+  backups?: BackupStore;
 }
 
 // Works from both src/ (tsx dev) and dist/ (build) — web/ sits beside them.
@@ -49,8 +51,14 @@ function tokenEquals(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ha, hb);
 }
 
+const patchSchema = z.object({
+  label: z.string().max(120).optional(),
+  notes: z.string().max(4000).optional(),
+});
+
 export function buildApp(deps: AppDeps): Express {
   const { config, store, wg } = deps;
+  const backups = deps.backups ?? new BackupStore(config.backup.dir, config.backup.keep);
   const app = express();
   app.use(express.json({ limit: "16kb" }));
 
@@ -180,11 +188,99 @@ export function buildApp(deps: AppDeps): Express {
   app.get("/api/routers", requireAdmin, async (_req: Request, res: Response) => {
     const handshakes = await wg.latestHandshakes().catch(() => ({}) as Record<string, number | null>);
     res.json(
-      store.list().map(({ password: _password, ...rest }) => ({
-        ...rest,
-        handshakeAge: handshakes[rest.publicKey] ?? null,
-      })),
+      store.list().map(({ password: _password, ...rest }) => {
+        const handshakeAge = handshakes[rest.publicKey] ?? null;
+        return {
+          ...rest,
+          handshakeAge,
+          online:
+            rest.state !== "revoked" &&
+            handshakeAge !== null &&
+            handshakeAge < config.monitor.offlineAfterSeconds,
+        };
+      }),
     );
+  });
+
+  // Operator metadata: friendly label + notes.
+  app.patch("/api/routers/:ref", requireAdmin, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const parsed = patchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid request" });
+      return;
+    }
+    if (parsed.data.label !== undefined) router.label = parsed.data.label;
+    if (parsed.data.notes !== undefined) router.notes = parsed.data.notes;
+    router.updatedAt = new Date().toISOString();
+    store.save(router);
+    res.json({ ok: true });
+  });
+
+  // Router-pushed config backup (RouterOS `/tool fetch upload=yes`). The
+  // token travels as a query parameter because fetch upload mode cannot
+  // reliably set headers.
+  app.post(
+    "/api/backup",
+    express.raw({ type: () => true, limit: "4mb" }),
+    (req: Request, res: Response) => {
+      const token = String(req.query.token ?? "");
+      const serial = String(req.query.serial ?? "");
+      if (!tokenEquals(token, config.auth.provisioningToken)) {
+        res.status(401).json({ error: "invalid provisioning token" });
+        return;
+      }
+      const router = store.findBySerial(serial);
+      if (!router || router.state === "revoked") {
+        res.status(404).json({ error: "unknown router" });
+        return;
+      }
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        res.status(400).json({ error: "empty backup" });
+        return;
+      }
+      try {
+        const { stored } = backups.saveIfChanged(router.serialNumber, req.body);
+        const now = new Date().toISOString();
+        router.lastBackupAt = now;
+        router.lastSeenAt = now;
+        store.save(router);
+        if (stored) console.log(`backup stored for ${router.serialNumber} (${req.body.length} bytes)`);
+        res.json({ ok: true, stored });
+      } catch (err) {
+        console.error("backup failed:", err);
+        res.status(500).json({ error: "failed to store backup" });
+      }
+    },
+  );
+
+  app.get("/api/routers/:ref/backups", requireAdmin, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    res.json(backups.list(router.serialNumber));
+  });
+
+  app.get("/api/routers/:ref/backups/:name", requireAdmin, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    const content = router ? backups.read(router.serialNumber, req.params.name) : null;
+    if (!router || content === null) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    res
+      .type("text/plain")
+      .setHeader(
+        "content-disposition",
+        `attachment; filename="${router.serialNumber}-${req.params.name}"`,
+      )
+      .send(content);
   });
 
   // Full details for one router, credentials included.

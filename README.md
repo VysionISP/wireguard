@@ -100,6 +100,44 @@ The dashboard talks to the admin API below; anything it does you can also
 script. If you expose it beyond localhost, put it behind the same HTTPS
 reverse proxy as the provisioning endpoints.
 
+## Fleet monitoring
+
+The server checks every router's WireGuard handshake in the background
+(`monitor.intervalSeconds`, default 60 s; offline after
+`monitor.offlineAfterSeconds`, default 180 s). Online routers get their
+last-seen time updated continuously, and every online↔offline transition is
+recorded (bounded history), so flapping links are visible in the dashboard's
+details view without anyone clicking Verify.
+
+## Labels & notes
+
+Each router can carry a free-text label (customer, site, address) and notes,
+editable in the dashboard details view or via `mtprov label <ref> <text>`.
+The dashboard search box filters on label, serial, identity, IP and notes.
+
+## Hardening / base config
+
+Every provisioning script applies opinionated defaults, configurable under
+`hardening` in config.json:
+
+- `disableServices` (default `["telnet", "ftp"]`) — services the tool
+  depends on (ssh/www/api) are never disabled, even if listed
+- `dns` — when set, configures `/ip/dns` servers
+- `ntpServers` — when set, enables the NTP client with these servers
+- `identityPrefix` — routers still named "MikroTik" get renamed to
+  `<prefix>-<serial>`; custom identities are left alone
+
+## Config backups
+
+After provisioning, each router runs a scheduler (`backup.intervalHours`,
+default 24 h, plus once at startup) that `/export`s its configuration and
+pushes it to `POST /api/backup` — router-initiated, so it works behind NAT
+and needs no polling. The server keeps a new version only when the config
+actually changed (up to `backup.keep` versions per router, default 30, under
+`backup.dir`). Versions are listed and downloadable in the dashboard details
+view. Set `backup.enabled: false` to skip the scheduler on newly provisioned
+routers.
+
 ## Configuration (`config.json`)
 
 | Key | Meaning |
@@ -132,6 +170,10 @@ reverse proxy as the provisioning endpoints.
 | `POST /api/routers/:ref/verify` | `Bearer` admin token | Handshake + REST reachability check; marks `verified` |
 | `POST /api/routers/:ref/revoke` | `Bearer` admin token | Remove peer, block re-registration |
 | `GET /api/bootstrap-info` | `Bearer` admin token | The tech-facing bootstrap one-liner |
+| `PATCH /api/routers/:ref` | `Bearer` admin token | Set `label` / `notes` |
+| `POST /api/backup?token&serial` | provisioning token (query) | Router-pushed config backup |
+| `GET /api/routers/:ref/backups` | `Bearer` admin token | List stored backup versions |
+| `GET /api/routers/:ref/backups/:name` | `Bearer` admin token | Download a backup |
 | `GET /healthz` | none | Liveness |
 
 Router lifecycle: `registered → confirmed → verified` (via `verify`), or `revoked`.

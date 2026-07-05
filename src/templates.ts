@@ -116,7 +116,7 @@ export function renderProvision(cfg: Config, router: RouterRecord): string {
     }
 }
 
-# 6. Tell the provisioning server the configuration was applied
+${renderHardening(cfg, router)}${renderBackupSchedule(cfg, router)}# 8. Tell the provisioning server the configuration was applied
 :do {
     /tool fetch url="${url}/api/confirm" http-method=post http-header-field="Content-Type: application/json" http-data="{\\"token\\":\\"${rosQuote(cfg.auth.provisioningToken)}\\",\\"serialNumber\\":\\"${rosQuote(router.serialNumber)}\\"}" output=none${cert}
 } on-error={
@@ -124,6 +124,62 @@ export function renderProvision(cfg: Config, router: RouterRecord): string {
 }
 
 :log info "wg-provision: done - management IP ${router.tunnelIp}"
+`;
+}
+
+/** Services the tool depends on; never allowed to be disabled by hardening. */
+const REQUIRED_SERVICES = new Set(["ssh", "www", "api"]);
+
+function renderHardening(cfg: Config, router: RouterRecord): string {
+  const h = cfg.hardening;
+  const parts: string[] = [];
+
+  const disable = h.disableServices.filter((s) => !REQUIRED_SERVICES.has(s));
+  for (const svc of disable) {
+    parts.push(`/ip/service/disable [find name="${rosQuote(svc)}"]`);
+  }
+  if (h.dns.length > 0) {
+    parts.push(`/ip/dns/set servers=${h.dns.map(rosQuote).join(",")}`);
+  }
+  if (h.ntpServers.length > 0) {
+    parts.push(
+      `:do {`,
+      `    /system/ntp/client/servers/remove [find]`,
+      ...h.ntpServers.map((s) => `    /system/ntp/client/servers/add address="${rosQuote(s)}"`),
+      `    /system/ntp/client/set enabled=yes`,
+      `} on-error={ :log warning "wg-provision: could not configure NTP" }`,
+    );
+  }
+  if (h.identityPrefix) {
+    const name = rosQuote(`${h.identityPrefix}-${router.serialNumber}`);
+    parts.push(
+      `:if ([/system/identity/get name] = "MikroTik") do={ /system/identity/set name="${name}" }`,
+    );
+  }
+  if (parts.length === 0) return "";
+  return `# 6. Hardening / base configuration\n${parts.join("\n")}\n\n`;
+}
+
+function renderBackupSchedule(cfg: Config, router: RouterRecord): string {
+  if (!cfg.backup.enabled) return "";
+  const url = cfg.server.publicUrl.replace(/\/$/, "");
+  const h = cfg.backup.intervalHours;
+  const interval = h % 24 === 0 ? `${h / 24}d` : `${h}h`;
+  const cert = cfg.router.strictTls ? " check-certificate=yes-without-crl" : "";
+  // The script body is a RouterOS string literal inside the .rsc, so quotes
+  // inside it are escaped for RouterOS (\\\" in TS source -> \" in the file).
+  const uploadUrl = `${url}/api/backup?token=${encodeURIComponent(cfg.auth.provisioningToken)}&serial=${encodeURIComponent(router.serialNumber)}`;
+  const script =
+    `/export file=wg-provision-backup; :delay 5s; ` +
+    `/tool fetch upload=yes http-method=post url=\\"${rosQuote(uploadUrl)}\\" src-path=wg-provision-backup.rsc output=none${cert}; ` +
+    `/file/remove [find name=\\"wg-provision-backup.rsc\\"]`;
+  return `# 7. Scheduled config backup (router pushes /export to the server)
+/system/script/remove [find name="wg-provision-backup"]
+/system/script/add name="wg-provision-backup" comment="managed: wg-provision" source="${script}"
+/system/scheduler/remove [find name="wg-provision-backup"]
+/system/scheduler/add name="wg-provision-backup" interval=${interval} start-time=startup on-event="wg-provision-backup" comment="managed: wg-provision"
+:do { /system/script/run wg-provision-backup } on-error={ :log warning "wg-provision: first backup failed" }
+
 `;
 }
 

@@ -7,6 +7,7 @@ import { DryRunManager, WgCommandManager, type WireguardManager } from "./wiregu
 import { renderBootstrap, renderOneLiner } from "./templates.js";
 import { revokeRouter, verifyRouter } from "./actions.js";
 import { syncPeers } from "./sync.js";
+import { startMonitor } from "./monitor.js";
 
 function makeWg(config: Config): WireguardManager {
   return config.wireguard.applyMode === "wg"
@@ -35,11 +36,13 @@ program
     const { applied, failed } = await syncPeers(store, wg);
     if (applied || failed) console.log(`peer sync: ${applied} applied, ${failed} failed`);
     const app = buildApp({ config, store, wg });
+    startMonitor(store, wg, config.monitor.intervalSeconds, config.monitor.offlineAfterSeconds);
     app.listen(config.server.port, config.server.host, () => {
       console.log(
         `provisioning server listening on ${config.server.host}:${config.server.port} (public: ${config.server.publicUrl})`,
       );
       console.log(`wireguard apply mode: ${config.wireguard.applyMode}`);
+      console.log(`monitor: every ${config.monitor.intervalSeconds}s, offline after ${config.monitor.offlineAfterSeconds}s`);
     });
   });
 
@@ -119,6 +122,23 @@ program
       console.error(`reachable: no — ${result.error}`);
       process.exitCode = 1;
     }
+  });
+
+program
+  .command("label <ref> <label...>")
+  .description("set a friendly label (customer/site) on a router")
+  .action((ref: string, labelWords: string[]) => {
+    const { store } = open(program.opts().config);
+    const router = store.find(ref);
+    if (!router) {
+      console.error(`no router matching "${ref}"`);
+      process.exitCode = 1;
+      return;
+    }
+    router.label = labelWords.join(" ");
+    router.updatedAt = new Date().toISOString();
+    store.save(router);
+    console.log(`${router.serialNumber} labelled "${router.label}"`);
   });
 
 program

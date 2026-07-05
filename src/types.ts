@@ -19,6 +19,16 @@ export interface RouterRecord {
   createdAt: string;
   updatedAt: string;
   lastSeenAt: string | null;
+  /** Operator-set friendly name (customer, site…). Absent on old records. */
+  label?: string;
+  /** Operator notes. Absent on old records. */
+  notes?: string;
+  /** Last online/offline verdict from the monitor; undefined until first tick. */
+  lastOnline?: boolean;
+  /** Recent online/offline transitions (bounded), newest last. */
+  transitions?: Array<{ at: string; online: boolean }>;
+  /** When the router last pushed a config backup that we stored or matched. */
+  lastBackupAt?: string | null;
 }
 
 export interface RegisterRequest {

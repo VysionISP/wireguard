@@ -47,6 +47,40 @@ const configSchema = z.object({
     /** When true, RouterOS fetch verifies the TLS certificate of publicUrl. */
     strictTls: z.boolean().default(false),
   }),
+  /** Background fleet monitoring (handshake-based online/offline tracking). */
+  monitor: z
+    .object({
+      intervalSeconds: z.number().int().min(10).default(60),
+      /** A router is considered offline when its last handshake is older than this. */
+      offlineAfterSeconds: z.number().int().min(30).default(180),
+    })
+    .default({}),
+  /** Opinionated defaults applied to every router at provision time. */
+  hardening: z
+    .object({
+      /** RouterOS services to disable. ssh/www/api are never disabled (we need them). */
+      disableServices: z.array(z.string()).default(["telnet", "ftp"]),
+      /** When set, /ip/dns servers are configured on the router. */
+      dns: z.array(z.string()).default([]),
+      /** When set, the NTP client is enabled with these servers. */
+      ntpServers: z.array(z.string()).default([]),
+      /**
+       * When set, routers still carrying the factory identity "MikroTik" get
+       * renamed to "<prefix>-<serial>". Custom identities are left alone.
+       */
+      identityPrefix: z.string().default(""),
+    })
+    .default({}),
+  /** Router-pushed config backups (/export uploaded on a schedule). */
+  backup: z
+    .object({
+      enabled: z.boolean().default(true),
+      intervalHours: z.number().int().min(1).default(24),
+      dir: z.string().default("data/backups"),
+      /** Versions kept per router; older ones are pruned. */
+      keep: z.number().int().min(1).default(30),
+    })
+    .default({}),
   /** Path of the JSON router inventory. */
   storePath: z.string().default("data/routers.json"),
 });

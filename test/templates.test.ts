@@ -61,6 +61,42 @@ describe("provision script", () => {
   });
 });
 
+describe("hardening options", () => {
+  it("renders dns, ntp and identity naming when configured", () => {
+    const c = testConfig();
+    c.hardening.dns = ["1.1.1.1", "8.8.8.8"];
+    c.hardening.ntpServers = ["time.cloudflare.com"];
+    c.hardening.identityPrefix = "vysion";
+    const rsc = renderProvision(c, router);
+    expect(rsc).toContain("/ip/dns/set servers=1.1.1.1,8.8.8.8");
+    expect(rsc).toContain('/system/ntp/client/servers/add address="time.cloudflare.com"');
+    expect(rsc).toContain('/system/identity/set name="vysion-HEX123456"');
+    expect(rsc).toContain('= "MikroTik") do={'); // only renames factory-default identities
+  });
+
+  it("never disables required services even if configured to", () => {
+    const c = testConfig();
+    c.hardening.disableServices = ["telnet", "ssh", "www", "api"];
+    const rsc = renderProvision(c, router);
+    expect(rsc).toContain('/ip/service/disable [find name="telnet"]');
+    expect(rsc).not.toContain('/ip/service/disable [find name="ssh"]');
+    expect(rsc).not.toContain('/ip/service/disable [find name="www"]');
+    expect(rsc).not.toContain('/ip/service/disable [find name="api"]');
+  });
+
+  it("omits the backup block when disabled", () => {
+    const c = testConfig();
+    c.backup.enabled = false;
+    expect(renderProvision(c, router)).not.toContain("wg-provision-backup");
+  });
+
+  it("formats sub-day backup intervals in hours", () => {
+    const c = testConfig();
+    c.backup.intervalHours = 12;
+    expect(renderProvision(c, router)).toContain("interval=12h");
+  });
+});
+
 describe("one-liner", () => {
   it("fetches and imports the bootstrap script", () => {
     const line = renderOneLiner(cfg);

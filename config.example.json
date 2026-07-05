@@ -23,5 +23,21 @@
     "username": "wg-mgmt",
     "strictTls": false
   },
+  "monitor": {
+    "intervalSeconds": 60,
+    "offlineAfterSeconds": 180
+  },
+  "hardening": {
+    "disableServices": ["telnet", "ftp"],
+    "dns": [],
+    "ntpServers": [],
+    "identityPrefix": ""
+  },
+  "backup": {
+    "enabled": true,
+    "intervalHours": 24,
+    "dir": "data/backups",
+    "keep": 30
+  },
   "storePath": "data/routers.json"
 }

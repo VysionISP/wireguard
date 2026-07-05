@@ -39,6 +39,12 @@
 
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .panelhead { display: flex; align-items: center; border-bottom: 1px solid var(--border); }
+  .panelhead h2 { border-bottom: none; flex: 1; }
+  .panelhead input {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 5px 10px; font: inherit; font-size: 13px; margin-right: 12px; width: 220px;
+  }
   .tablewrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 8px 10px; white-space: nowrap; }
@@ -82,6 +88,17 @@
   .cred .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
   .cred .row span:first-child { color: var(--muted); width: 80px; }
   .cred .row code { flex: 1; }
+  .meta input, .meta textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 13px; margin: 4px 0 10px;
+  }
+  .meta textarea { resize: vertical; min-height: 54px; }
+  .meta label { color: var(--muted); font-size: 12px; }
+  .sub { color: var(--muted); font-size: 12px; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: .05em; }
+  .translist, .backlist { font-size: 13px; }
+  .translist div, .backlist div { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+  .backlist a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .backlist a:hover { text-decoration: underline; }
 
   #login { max-width: 360px; margin: 12vh auto 0; }
   #login .panel { padding: 24px; }
@@ -131,11 +148,14 @@
   <div class="cards" id="cards"></div>
 
   <div class="panel" style="margin-bottom:20px">
-    <h2>Routers</h2>
+    <div class="panelhead">
+      <h2>Routers</h2>
+      <input id="search" type="search" placeholder="search label, serial, identity, IP…">
+    </div>
     <div class="tablewrap">
       <table>
         <thead><tr>
-          <th>Tunnel</th><th>Serial</th><th>Identity</th><th>Board</th>
+          <th>Tunnel</th><th>Label</th><th>Serial</th><th>Identity</th>
           <th>Mgmt IP</th><th>State</th><th>Handshake</th><th>Last seen</th><th></th>
         </tr></thead>
         <tbody id="rows"></tbody>
@@ -211,9 +231,19 @@ function fmtDate(iso) {
   const d = new Date(iso);
   return d.toLocaleDateString() + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
-const online = (r) => r.handshakeAge != null && r.handshakeAge < 180;
+const online = (r) => r.online ?? (r.handshakeAge != null && r.handshakeAge < 180);
+let allRouters = [];
 
-function render(routers) {
+function matches(r, q) {
+  if (!q) return true;
+  return [r.label, r.serialNumber, r.identity, r.tunnelIp, r.boardName, r.notes]
+    .some((f) => (f || "").toLowerCase().includes(q));
+}
+
+function render() {
+  const routers = allRouters;
+  const q = $("search").value.trim().toLowerCase();
+  const shown = routers.filter((r) => matches(r, q));
   const active = routers.filter((r) => r.state !== "revoked");
   const counts = {
     total: active.length,
@@ -226,13 +256,14 @@ function render(routers) {
     ["Verified", counts.verified], ["Revoked", counts.revoked],
   ].map(([l, n]) => `<div class="card"><div class="num">${n}</div><div class="lbl">${l}</div></div>`).join("");
 
-  $("empty").classList.toggle("hidden", routers.length > 0);
-  $("rows").innerHTML = routers.map((r) => `
+  $("empty").classList.toggle("hidden", shown.length > 0);
+  if (routers.length > 0 && shown.length === 0) $("empty").textContent = "No routers match the search.";
+  $("rows").innerHTML = shown.map((r) => `
     <tr>
       <td><span class="dot ${online(r) ? "on" : "off"}"></span>${online(r) ? "up" : "down"}</td>
+      <td>${r.label ? esc(r.label) : '<span style="color:var(--muted)">—</span>'}</td>
       <td class="mono">${esc(r.serialNumber)}</td>
       <td>${esc(r.identity)}</td>
-      <td>${esc(r.boardName)}</td>
       <td class="mono">${esc(r.tunnelIp)}</td>
       <td><span class="pill ${esc(r.state)}">${esc(r.state)}</span></td>
       <td>${fmtAge(r.handshakeAge)}</td>
@@ -247,7 +278,8 @@ function render(routers) {
 
 async function load() {
   const [routers, boot] = await Promise.all([api("/api/routers"), api("/api/bootstrap-info")]);
-  render(routers);
+  allRouters = routers;
+  render();
   $("oneliner").textContent = boot.oneLiner;
   $("refreshed").textContent = "updated " + new Date().toLocaleTimeString();
 }
@@ -266,18 +298,31 @@ async function copy(text, what) {
 }
 
 async function openDetails(ref) {
-  const r = await api("/api/routers/" + encodeURIComponent(ref));
-  $("dTitle").textContent = r.serialNumber + " — " + r.identity;
+  const [r, backups] = await Promise.all([
+    api("/api/routers/" + encodeURIComponent(ref)),
+    api("/api/routers/" + encodeURIComponent(ref) + "/backups").catch(() => []),
+  ]);
+  $("dTitle").textContent = r.serialNumber + (r.label ? " — " + r.label : " — " + r.identity);
+  const transitions = (r.transitions || []).slice(-6).reverse();
   $("dBody").innerHTML = `
     <dl class="kv">
       <dt>State</dt><dd><span class="pill ${esc(r.state)}">${esc(r.state)}</span></dd>
       <dt>Board</dt><dd>${esc(r.boardName)} (ROS ${esc(r.rosVersion)})</dd>
+      <dt>Identity</dt><dd>${esc(r.identity)}</dd>
       <dt>Mgmt IP</dt><dd class="mono">${esc(r.tunnelIp)}</dd>
       <dt>Public key</dt><dd class="mono">${esc(r.publicKey)}</dd>
       <dt>Handshake</dt><dd>${fmtAge(r.handshakeAge)}</dd>
       <dt>Registered</dt><dd>${fmtDate(r.createdAt)}</dd>
       <dt>Last seen</dt><dd>${fmtDate(r.lastSeenAt)}</dd>
+      <dt>Last backup</dt><dd>${fmtDate(r.lastBackupAt)}</dd>
     </dl>
+    <div class="meta">
+      <label for="mLabel">Label (customer / site)</label>
+      <input id="mLabel" value="${esc(r.label || "")}" placeholder="e.g. Smith residence — Ballarat">
+      <label for="mNotes">Notes</label>
+      <textarea id="mNotes" placeholder="anything worth remembering about this install">${esc(r.notes || "")}</textarea>
+      <button class="primary" data-act="savemeta" data-ref="${esc(r.id)}">Save</button>
+    </div>
     <div class="cred">
       <div class="row"><span>ssh</span><code class="mono">ssh ${esc(r.username)}@${esc(r.tunnelIp)}</code>
         <button data-copy="ssh ${esc(r.username)}@${esc(r.tunnelIp)}">Copy</button></div>
@@ -287,11 +332,50 @@ async function openDetails(ref) {
         <button data-copy="${esc(r.password)}">Copy</button></div>
       <div class="row"><span>REST</span><code class="mono">http://${esc(r.tunnelIp)}/rest/</code>
         <button data-copy="http://${esc(r.tunnelIp)}/rest/">Copy</button></div>
+    </div>
+    ${transitions.length ? `<div class="sub">Recent connectivity</div>
+    <div class="translist">${transitions.map((t) => `
+      <div><span class="dot ${t.online ? "on" : "off"}"></span> went ${t.online ? "online" : "offline"} — ${fmtDate(t.at)}</div>`).join("")}
+    </div>` : ""}
+    <div class="sub">Config backups</div>
+    <div class="backlist">${backups.length ? backups.map((b) => `
+      <div><a data-dl="${esc(b.name)}" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">${esc(b.name)}</a>
+      <span style="color:var(--muted)">${(b.size / 1024).toFixed(1)} KB</span></div>`).join("")
+      : '<div style="color:var(--muted)">none yet — the router pushes its config on schedule after provisioning</div>'}
     </div>`;
   $("details").showModal();
 }
 
+async function saveMeta(ref) {
+  await api("/api/routers/" + encodeURIComponent(ref), {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label: $("mLabel").value.trim(), notes: $("mNotes").value }),
+  });
+  toast("Saved");
+  $("details").close();
+  await load();
+}
+
+async function downloadBackup(ref, serial, name) {
+  const res = await fetch(`/api/routers/${encodeURIComponent(ref)}/backups/${encodeURIComponent(name)}`, {
+    headers: { authorization: "Bearer " + token },
+  });
+  if (!res.ok) return toast("Download failed");
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${serial}-${name}`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 document.addEventListener("click", async (ev) => {
+  const link = ev.target.closest("a[data-dl]");
+  if (link) {
+    ev.preventDefault();
+    return downloadBackup(link.dataset.ref, link.dataset.serial, link.dataset.dl).catch((e) => toast(e.message));
+  }
   const btn = ev.target.closest("button");
   if (!btn) return;
   if (btn.dataset.copy != null) return copy(btn.dataset.copy, "Value");
@@ -299,6 +383,7 @@ document.addEventListener("click", async (ev) => {
   if (!act) return;
   try {
     if (act === "details") await openDetails(ref);
+    if (act === "savemeta") await saveMeta(ref);
     if (act === "verify") {
       btn.disabled = true; btn.textContent = "…";
       const v = await api("/api/routers/" + encodeURIComponent(ref) + "/verify", { method: "POST" });
@@ -330,6 +415,7 @@ $("logoutBtn").addEventListener("click", () => {
   localStorage.removeItem("mtprov.token"); token = ""; showLogin();
 });
 $("reloadBtn").addEventListener("click", () => load().catch((e) => toast(e.message)));
+$("search").addEventListener("input", () => render());
 $("copyBoot").addEventListener("click", () => copy($("oneliner").textContent, "Bootstrap one-liner"));
 
 if (token) start(); else showLogin();
