@@ -13,7 +13,6 @@ import {
 } from "./routeros.js";
 
 const MAX_SEEN_LOGINS = 500;
-const AUTO_WATCH_TYPES = new Set(["ether", "sfp", "sfp-plus", "wlan", "lte"]);
 
 export interface DeviceMonitorDeps {
   store: RouterStore;
@@ -32,10 +31,14 @@ function labelOf(r: RouterRecord): string {
   return r.label || r.identity || r.serialNumber;
 }
 
-/** Which interfaces this device's rules watch (explicit list, or auto). */
-function watchedInterfaces(mon: DeviceMonitoring, all: string[], auto: Set<string>): string[] {
-  if (mon.watchInterfaces.length > 0) return mon.watchInterfaces.filter((n) => all.includes(n));
-  return [...auto];
+/**
+ * Which interfaces this device's rules watch. Link-down alerts fire ONLY for
+ * ports explicitly selected in watchInterfaces — an empty list watches nothing,
+ * so turning on "alert on link down" without picking ports never surprises a
+ * tech with alerts for interfaces they didn't opt in.
+ */
+function watchedInterfaces(mon: DeviceMonitoring, all: string[]): string[] {
+  return mon.watchInterfaces.filter((n) => all.includes(n));
 }
 
 /**
@@ -90,8 +93,7 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
     if (mon.alertOnLinkDown) {
       const ifaces = await fetchIfaces(router.tunnelIp, router.username, router.password);
       const names = ifaces.map((i) => i.name);
-      const auto = new Set(ifaces.filter((i) => AUTO_WATCH_TYPES.has(i.type)).map((i) => i.name));
-      const watch = new Set(watchedInterfaces(mon, names, auto));
+      const watch = new Set(watchedInterfaces(mon, names));
       for (const iface of ifaces) {
         if (!watch.has(iface.name) || iface.disabled) continue;
         const prev = state.ifaceRunning[iface.name];

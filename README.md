@@ -211,16 +211,19 @@ survives restarts and never double-fires. Provisioned routers get a RouterOS
 
 ### Device types
 
-Each router is classed as **customer** (CPE — watch the uplink + logins, pull
-access stats like LTE/5G signal) or **infrastructure** (towers/PoPs/core —
-watch every port + logins, pull port traffic). Set it per device in the
-details view; it drives the default monitoring profile (infrastructure always
-watches link state, since those links are load-bearing) and which live stats
-the dashboard emphasises. New routers default to customer with monitoring on.
+Each router is classed as **customer** (CPE — logins, pull access stats like
+LTE/5G signal) or **infrastructure** (towers/PoPs/core — logins + port
+traffic). Set it per device in the details view; it drives the default
+monitoring profile (infrastructure enables link-down alerting by default,
+since those links are load-bearing) and which live stats the dashboard
+emphasises. Link-down still only fires for the specific ports you select. New
+routers default to customer with monitoring on.
 
 Per-device monitoring is fully configurable in the details view (admin):
 device type, master on/off, alert-on-login, alert-on-link-down, and which
-ports to watch (blank = auto: ethernet/SFP/LTE ports up at first poll).
+ports to watch. Link-down alerts fire only for ports you explicitly select in
+the port map — a blank list watches nothing, so no port alerts until you opt
+each one in.
 
 ## Customers & network map
 

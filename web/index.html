@@ -1304,7 +1304,7 @@ async function openDetails(ref) {
       <div class="r"><span class="chips">Port map — click a port to watch its link state</span></div>
       <div id="portmap"><span class="chips">loading ports…</span></div>
       <div class="r"><span class="chips">Watch ports</span>
-        <input id="monIfaces" placeholder="blank = auto (uplinks)" value="${esc((mon.watchInterfaces || []).join(", "))}" style="flex:1;min-width:160px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px;font-family:var(--mono);font-size:12px">
+        <input id="monIfaces" placeholder="blank = no ports watched" value="${esc((mon.watchInterfaces || []).join(", "))}" style="flex:1;min-width:160px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px;font-family:var(--mono);font-size:12px">
       </div>
       <div><button class="primary" data-act="savemon" data-ref="${esc(r.id)}">Save monitoring</button></div>
     </div>` : `<div class="chips">Type: <span class="dtype ${esc(dtype)}">${esc(dtype)}</span> · monitoring ${mon.enabled ? "on" : "off"} (admin can change)</div>`}
@@ -1405,7 +1405,7 @@ function updatePortSummary() {
   const el = $("portsum");
   if (el) el.innerHTML = arr.length
     ? `Watching link state on <b>${arr.length}</b> port(s): <span class="mono" style="color:var(--accent)">${arr.map(esc).join(", ")}</span>`
-    : "No ports selected — auto mode (all ethernet/SFP ports up at first poll).";
+    : "No ports selected — link-down alerts are off for this device. Click a port above to watch it.";
   const f = $("monIfaces");
   if (f) f.value = arr.join(", ");
 }

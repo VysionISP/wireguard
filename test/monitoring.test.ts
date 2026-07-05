@@ -68,6 +68,8 @@ describe("deviceMonitorTick", () => {
   it("baselines on first poll, then alerts on link-down and new logins", async () => {
     const store = new RouterStore(path.join(tempDir(), "routers.json"));
     const r = router("INFRA1", 1);
+    // Link-down only fires for explicitly-watched ports; watch ether1.
+    r.monitoring!.watchInterfaces = ["ether1"];
     store.save(r);
     const issues = new IssueStore(path.join(tempDir(), "issues.json"));
     const events = new EventLog(path.join(tempDir(), "events.jsonl"));
@@ -118,6 +120,30 @@ describe("deviceMonitorTick", () => {
     await deviceMonitorTick(deps);
     expect(issues.counts().warning).toBe(0);
     expect(events.forSerial("INFRA1").some((e) => e.type === "link-up")).toBe(true);
+  });
+
+  it("does not alert on link-down for ports that aren't explicitly watched", async () => {
+    const store = new RouterStore(path.join(tempDir(), "routers.json"));
+    const r = router("INFRA9", 9);
+    r.monitoring!.watchInterfaces = []; // empty = watch nothing
+    store.save(r);
+    const issues = new IssueStore(path.join(tempDir(), "issues.json"));
+    const events = new EventLog(path.join(tempDir(), "events.jsonl"));
+    const alerts: string[] = [];
+    const alerter = new Alerter({ webhookUrl: "https://h.test", notifyOnRegister: true, notifyOnline: true, suppressMinutes: 0 } as any, async (t) => { alerts.push(t); });
+    let ifaces: IfaceState[] = [{ name: "ether1", type: "ether", running: true, disabled: false }];
+    const deps = {
+      store, wg: wgFresh([fakeKey(9)]), issues, events, alerter, offlineAfterSeconds: 180,
+      managementUsername: "wg-mgmt",
+      fetchInterfaces: async () => ifaces,
+      fetchLog: async () => [],
+    };
+    await deviceMonitorTick(deps); // baseline
+    ifaces = [{ name: "ether1", type: "ether", running: false, disabled: false }];
+    await deviceMonitorTick(deps);
+    expect(issues.counts().warning).toBe(0);
+    expect(events.forSerial("INFRA9").some((e) => e.type === "link-down")).toBe(false);
+    expect(alerts.some((a) => /link went DOWN/i.test(a))).toBe(false);
   });
 
   it("collapses duplicate logins and ignores the management account's own polls", async () => {

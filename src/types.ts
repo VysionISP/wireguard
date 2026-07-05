@@ -54,7 +54,7 @@ export interface DeviceMonitoring {
   alertOnLogin: boolean;
   /** Notify + raise an issue when a watched port's link drops. */
   alertOnLinkDown: boolean;
-  /** Ports to watch; empty = auto (all ethernet/SFP ports that were up at first poll). */
+  /** Ports to watch for link-down; empty = watch nothing (opt in per port). */
   watchInterfaces: string[];
 }
 
