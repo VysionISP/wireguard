@@ -39,19 +39,15 @@ function watchedInterfaces(mon: DeviceMonitoring, all: string[], auto: Set<strin
 }
 
 /**
- * Extract a login from a log line, or null to ignore it.
- *
- * The key is the message text WITHOUT the timestamp so a single human login
- * (Winbox opens several connections, each logged a second apart) collapses to
- * one notification instead of several. Logins by the management account are
- * dropped entirely — those are this server's own REST/API polling.
+ * Extract a login from a log line, or null to ignore it. Logins by the
+ * management account are dropped — those are this server's own REST/API
+ * polling.
  */
-function loginInfo(entry: LogEntry, mgmtUser: string): { key: string; summary: string } | null {
+function loginInfo(entry: LogEntry, mgmtUser: string): { summary: string } | null {
   if (!/logged in/i.test(entry.message)) return null;
   const who = /^user (\S+) logged in/i.exec(entry.message)?.[1];
-  if (who && mgmtUser && who === mgmtUser) return null; // our own polling — never alert
-  const summary = entry.message.trim();
-  return { key: summary, summary };
+  if (who && mgmtUser && who === mgmtUser) return null;
+  return { summary: entry.message.trim() };
 }
 
 /**
@@ -130,24 +126,27 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
     if (mon.alertOnLogin) {
       const log = await fetchLog(router.tunnelIp, router.username, router.password);
       const prevSeen = new Set(state.seenLogins);
-      // Distinct logins currently in the router's memory log, de-duplicated by
-      // message so one human login (several Winbox connections) is one alert,
-      // and excluding this server's own management-account API polls.
-      const currentMap = new Map<string, string>();
+      // Each login log line, keyed by time+message so it's a stable per-entry
+      // identity across polls — a genuinely new login (new timestamp) is a new
+      // key and always alerts, even if the text matches a past login.
+      const entries: Array<{ key: string; msg: string }> = [];
       for (const entry of log) {
         const info = loginInfo(entry, deps.managementUsername);
-        if (info && !currentMap.has(info.key)) currentMap.set(info.key, info.summary);
+        if (info) entries.push({ key: `${entry.time}|${info.summary}`, msg: info.summary });
       }
       if (state.initialised) {
-        for (const [key, summary] of currentMap) {
-          if (prevSeen.has(key)) continue;
-          events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "login", severity: "info", message: summary });
-          // suppressKey collapses repeats across ticks/restarts within the window.
-          alerter.custom(router, `🔑 ${labelOf(router)}: ${summary}`, "login", `login:${router.serialNumber}:${key}`).catch(() => {});
+        // Collapse the burst of identical lines Winbox writes for ONE login
+        // (same message within this poll) to a single alert, while still
+        // recording every entry key below so we don't re-alert next poll.
+        const alertedThisPoll = new Set<string>();
+        for (const e of entries) {
+          if (prevSeen.has(e.key) || alertedThisPoll.has(e.msg)) continue;
+          alertedThisPoll.add(e.msg);
+          events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "login", severity: "info", message: e.msg });
+          alerter.custom(router, `🔑 ${labelOf(router)}: ${e.msg}`, "login").catch(() => {});
         }
       }
-      // The log IS the source of truth; set rather than accumulate+truncate.
-      state.seenLogins = [...currentMap.keys()].slice(-MAX_SEEN_LOGINS);
+      state.seenLogins = entries.map((e) => e.key).slice(-MAX_SEEN_LOGINS);
       dirty = true;
     }
 

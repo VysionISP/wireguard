@@ -153,6 +153,14 @@ describe("deviceMonitorTick", () => {
     // Next tick, same log → no repeat.
     await deviceMonitorTick(deps);
     expect(alerts.filter((a) => /logged in/.test(a))).toHaveLength(1);
+
+    // A genuinely new login later (new timestamp, same text) DOES alert again.
+    log = [
+      ...log,
+      { id: "*6", time: "10:05:00", topics: "system,info,account", message: "user admin logged in from 1.2.3.4 via winbox" },
+    ];
+    await deviceMonitorTick(deps);
+    expect(alerts.filter((a) => /logged in/.test(a))).toHaveLength(2);
   });
 
   it("skips routers without monitoring, offline routers, and staged/revoked", async () => {
