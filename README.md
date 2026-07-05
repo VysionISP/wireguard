@@ -144,6 +144,40 @@ its new public key replaces the old peer. Revoked serials cannot re-register.
 - Credentials live in `data/routers.json` on the server host — restrict file
   permissions and back it up encrypted.
 
+## Deploying on Ubuntu
+
+`deploy/ubuntu/deploy.sh` sets up an Ubuntu host (22.04/24.04, Debian 12 also
+works) in one shot:
+
+```bash
+sudo deploy/ubuntu/deploy.sh \
+    --public-url https://provision.example.com \
+    --endpoint-host provision.example.com
+```
+
+It installs Node.js ≥ 20 (NodeSource) and `wireguard-tools` if missing, builds
+the project, generates the server WireGuard keypair, brings the management
+tunnel up via `wg-quick@wg0` (enabled at boot), writes `config.json` with
+random tokens (an existing one is kept), installs a `mtprov` systemd service
+that starts after the tunnel with auto-restart, opens ufw ports if ufw is
+active, health-checks the server, and prints the bootstrap one-liner.
+
+Optional flags: `--http-port` (8442), `--wg-port` (51820), `--mgmt-cidr`
+(`10.99.0.0/16`), `--server-tunnel-ip` (`10.99.0.1`), `--wg-interface`
+(`wg0`). Day-to-day:
+
+```bash
+systemctl status mtprov          # server status
+journalctl -u mtprov -f          # live logs
+node dist/cli.js list            # fleet
+sudo deploy/ubuntu/deploy.sh --uninstall   # remove service + tunnel, keep config/inventory
+```
+
+On startup (and via `node dist/cli.js sync`) the server re-applies every
+non-revoked peer to the interface, so the fleet reconnects after reboots.
+Terminate TLS in front of the HTTP port (nginx/caddy) so `--public-url`
+serves HTTPS.
+
 ## Deploying on Windows
 
 `deploy/windows/deploy.ps1` sets up everything on a Windows host (Windows
