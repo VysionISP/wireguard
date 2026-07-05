@@ -20,6 +20,7 @@ import { EventLog } from "./events.js";
 import { SettingsStore, ROUTE_KEYS, type RouteChat } from "./settings.js";
 import { telegram as realTelegram, type TelegramClient } from "./telegram.js";
 import { interfaceRates, type Sample } from "./stream.js";
+import { TopologyStore, type GroupTopology } from "./topology.js";
 import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, type FetchLiveFn, type FetchIfacesFn } from "./routeros.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
 import { defaultMonitoring, type RouterRecord, type DeviceType } from "./types.js";
@@ -42,6 +43,7 @@ export interface AppDeps {
   events?: EventLog;
   settings?: SettingsStore;
   telegram?: TelegramClient;
+  topology?: TopologyStore;
   sshRun?: SshRunFn;
   sftpPut?: SftpPutFn;
 }
@@ -83,6 +85,7 @@ function tokenEquals(a: string, b: string): boolean {
 const patchSchema = z.object({
   label: z.string().max(120).optional(),
   notes: z.string().max(4000).optional(),
+  customerGroup: z.string().max(80).optional(),
 });
 
 export function buildApp(deps: AppDeps): Express {
@@ -97,6 +100,7 @@ export function buildApp(deps: AppDeps): Express {
   const events = deps.events ?? new EventLog(config.eventsPath);
   const settings = deps.settings ?? new SettingsStore(config.settingsPath);
   const telegram = deps.telegram ?? realTelegram;
+  const topology = deps.topology ?? new TopologyStore(config.topologyPath);
   const sshRun = deps.sshRun ?? realSshRun;
   const sftpPut = deps.sftpPut ?? realSftpPut;
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
@@ -400,6 +404,7 @@ export function buildApp(deps: AppDeps): Express {
     }
     if (parsed.data.label !== undefined) router.label = parsed.data.label;
     if (parsed.data.notes !== undefined) router.notes = parsed.data.notes;
+    if (parsed.data.customerGroup !== undefined) router.customerGroup = parsed.data.customerGroup.trim();
     router.updatedAt = new Date().toISOString();
     store.save(router);
     audit.log(who(req), "label", router.serialNumber, router.label);
@@ -552,6 +557,7 @@ export function buildApp(deps: AppDeps): Express {
       return;
     }
     issues.clearSerial(router.serialNumber);
+    topology.removeRouter(router.id);
     store.delete(router.id);
     audit.log(who(req), "remove", router.serialNumber, router.tunnelIp);
     console.log(`removed ${router.serialNumber} from inventory`);
@@ -992,6 +998,118 @@ export function buildApp(deps: AppDeps): Express {
       }
     };
     const timer = setInterval(() => void tick(), 2000);
+    void tick();
+    req.on("close", () => clearInterval(timer));
+  });
+
+  // ---- customer groups + topology map -----------------------------------
+  function groupRouters(name: string) {
+    return store.list().filter((r) => (r.customerGroup ?? "") === name && r.state !== "revoked");
+  }
+
+  app.get("/api/groups", requireTech, (_req: Request, res: Response) => {
+    const counts = new Map<string, number>();
+    for (const r of store.list()) {
+      if (r.state === "revoked") continue;
+      const g = r.customerGroup?.trim();
+      if (g) counts.set(g, (counts.get(g) ?? 0) + 1);
+    }
+    res.json([...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name)));
+  });
+
+  app.get("/api/groups/:name", requireTech, async (req: Request, res: Response) => {
+    const name = req.params.name;
+    const routers = groupRouters(name);
+    const hs = await wg.latestHandshakes().catch(() => ({}) as Record<string, number | null>);
+    const validIds = new Set(routers.map((r) => r.id));
+    res.json({
+      name,
+      routers: routers.map((r) => {
+        const age = hs[r.publicKey] ?? null;
+        return {
+          id: r.id,
+          serialNumber: r.serialNumber,
+          label: r.label ?? "",
+          identity: r.identity,
+          deviceType: r.deviceType ?? "customer",
+          tunnelIp: r.tunnelIp,
+          state: r.state,
+          online: age !== null && age < config.monitor.offlineAfterSeconds,
+        };
+      }),
+      topology: topology.get(name),
+      validIds: [...validIds],
+    });
+  });
+
+  app.put("/api/groups/:name/topology", requireAdmin, (req: Request, res: Response) => {
+    const name = req.params.name;
+    const parsed = z
+      .object({
+        nodes: z.record(z.object({ x: z.number(), y: z.number() })),
+        links: z.array(
+          z.object({
+            id: z.string().max(64).optional(),
+            a: z.string().max(64),
+            aIface: z.string().max(64),
+            b: z.string().max(64),
+            bIface: z.string().max(64),
+          }),
+        ).max(500),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid topology" });
+      return;
+    }
+    const validIds = new Set(groupRouters(name).map((r) => r.id));
+    const saved = topology.set(name, parsed.data as GroupTopology, validIds);
+    audit.log(who(req), "topology", name, `${saved.links.length} link(s)`);
+    res.json({ ok: true, topology: saved });
+  });
+
+  // Live per-interface throughput for every device in a group — feeds the map.
+  app.get("/api/groups/:name/stream", (req: Request, res: Response) => {
+    if (!userFromToken(String(req.query.token ?? ""))) {
+      res.status(401).end();
+      return;
+    }
+    const name = req.params.name;
+    openSse(res);
+    const prev = new Map<string, Sample>();
+    let busy = false;
+    const tick = async (): Promise<void> => {
+      if (busy) return;
+      busy = true;
+      try {
+        const hs = await wg.latestHandshakes().catch(() => ({}) as Record<string, number | null>);
+        const routers = groupRouters(name);
+        const perRouter = await Promise.all(
+          routers.map(async (r) => {
+            const age = hs[r.publicKey] ?? null;
+            const online = age !== null && age < config.monitor.offlineAfterSeconds;
+            if (!online) return { id: r.id, online: false, interfaces: [] as unknown[] };
+            try {
+              const ifaces = await fetchIfaces(r.tunnelIp, r.username, r.password, 5000);
+              const curr: Sample = { at: Date.now(), interfaces: ifaces };
+              const rated = interfaceRates(prev.get(r.id) ?? null, curr);
+              prev.set(r.id, curr);
+              return {
+                id: r.id,
+                online: true,
+                interfaces: rated.map((i) => ({ name: i.name, running: i.running, rxBps: i.rxBps, txBps: i.txBps })),
+              };
+            } catch {
+              return { id: r.id, online: true, interfaces: [] as unknown[] };
+            }
+          }),
+        );
+        sseData(res, { type: "grouptraffic", routers: perRouter });
+      } finally {
+        busy = false;
+      }
+    };
+    const timer = setInterval(() => void tick(), 2500);
     void tick();
     req.on("close", () => clearInterval(timer));
   });

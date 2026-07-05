@@ -29,6 +29,8 @@ export interface RouterRecord {
   lastSeenAt: string | null;
   /** Operator-set friendly name (customer, site…). Absent on old records. */
   label?: string;
+  /** Customer group this device belongs to (for grouping + topology maps). */
+  customerGroup?: string;
   /** Operator notes. Absent on old records. */
   notes?: string;
   /** Last online/offline verdict from the monitor; undefined until first tick. */

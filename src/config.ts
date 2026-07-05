@@ -137,6 +137,8 @@ const configSchema = z.object({
   auditPath: z.string().default("data/audit.jsonl"),
   /** Dashboard-editable runtime settings (Telegram routing). */
   settingsPath: z.string().default("data/settings.json"),
+  /** Per-customer-group topology map layouts. */
+  topologyPath: z.string().default("data/topology.json"),
 });
 
 export type Config = z.infer<typeof configSchema>;

@@ -219,6 +219,22 @@ Per-device monitoring is fully configurable in the details view (admin):
 device type, master on/off, alert-on-login, alert-on-link-down, and which
 ports to watch (blank = auto: ethernet/SFP/LTE ports up at first poll).
 
+## Customer groups & network map
+
+Assign each device a **customer group** in its details view. Devices in the
+same group appear together on the **Map** tab as a network topology:
+
+- Devices are draggable nodes (positions are saved per group); a green LED
+  shows online state.
+- Admins draw **links** between two devices, naming the interface on each end
+  (e.g. `sfp1` ↔ `ether1`), and remove a link by clicking its label.
+- Each link shows **live throughput** streamed from the group's devices
+  (`GET /api/groups/:name/stream`), so you can watch traffic move across the
+  customer's network in real time. Links carrying traffic highlight.
+
+Layouts and links are stored per group in `topologyPath`
+(`data/topology.json`). Removing a router also drops it from any map.
+
 ## Live data (streaming)
 
 The dashboard streams live data over Server-Sent Events, so it updates without
@@ -329,6 +345,9 @@ require the admin role.
 | `GET /api/routers/:ref/interfaces` | tech | Router ports for the faceplate diagram |
 | `GET /api/stream` | token in query | SSE: live fleet handshake/online heartbeat |
 | `GET /api/routers/:ref/stream` | token in query | SSE: live per-device CPU/mem/traffic/LTE |
+| `GET /api/groups` / `/api/groups/:name` | tech | Customer groups + a group's devices/topology |
+| `PUT /api/groups/:name/topology` | admin | Save the group's map layout + links |
+| `GET /api/groups/:name/stream` | token in query | SSE: live per-interface traffic for the map |
 | `GET /api/issues` | tech | Active issues + counts (status board) |
 | `POST /api/issues/:id/ack` / `…/resolve` | tech | Acknowledge / clear an issue |
 | `GET /api/events` / `/api/routers/:ref/events` | tech | Global / per-device event feed |

@@ -48,6 +48,8 @@ export interface IfaceState {
   type: string;
   running: boolean;
   disabled: boolean;
+  rxByte: number;
+  txByte: number;
 }
 
 export interface LogEntry {
@@ -79,6 +81,8 @@ export async function fetchInterfaces(
     type: i.type ?? "?",
     running: i.running === "true",
     disabled: i.disabled === "true",
+    rxByte: Number(i["rx-byte"] ?? 0),
+    txByte: Number(i["tx-byte"] ?? 0),
   }));
 }
 
