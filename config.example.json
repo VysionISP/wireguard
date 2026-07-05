@@ -1,0 +1,27 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8442,
+    "publicUrl": "https://provision.example.com"
+  },
+  "auth": {
+    "provisioningToken": "CHANGE-ME-long-random-string-1",
+    "adminToken": "CHANGE-ME-long-random-string-2"
+  },
+  "wireguard": {
+    "interface": "wg0",
+    "serverPublicKey": "SERVER_WG_PUBLIC_KEY_BASE64=",
+    "endpointHost": "vpn.example.com",
+    "endpointPort": 51820,
+    "mgmtCidr": "10.99.0.0/16",
+    "serverTunnelIp": "10.99.0.1",
+    "persistentKeepalive": 25,
+    "applyMode": "wg"
+  },
+  "router": {
+    "wgInterfaceName": "wg-mgmt",
+    "username": "wg-mgmt",
+    "strictTls": false
+  },
+  "storePath": "data/routers.json"
+}

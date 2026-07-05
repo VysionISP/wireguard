@@ -1,0 +1,34 @@
+{
+  "name": "mikrotik-wg-provision",
+  "version": "0.1.0",
+  "description": "Zero-touch WireGuard auto-provisioning for MikroTik routers",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "mtprov": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts serve",
+    "start": "node dist/cli.js serve",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "express": "^4.21.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "@types/supertest": "^6.0.2",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
