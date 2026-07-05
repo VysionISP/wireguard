@@ -1,4 +1,4 @@
-export type RouterState = "registered" | "confirmed" | "verified" | "revoked";
+export type RouterState = "staged" | "registered" | "confirmed" | "verified" | "revoked";
 
 export interface RouterRecord {
   /** Stable internal id (uuid). */

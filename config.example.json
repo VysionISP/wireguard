@@ -6,7 +6,9 @@
   },
   "auth": {
     "provisioningToken": "CHANGE-ME-long-random-string-1",
-    "adminToken": "CHANGE-ME-long-random-string-2"
+    "adminToken": "CHANGE-ME-long-random-string-2",
+    "allowMasterProvisioningToken": true,
+    "sessionHours": 12
   },
   "wireguard": {
     "interface": "wg0",
@@ -39,5 +41,16 @@
     "dir": "data/backups",
     "keep": 30
   },
-  "storePath": "data/routers.json"
+  "alerts": {
+    "webhookUrl": "",
+    "telegramBotToken": "",
+    "telegramChatId": "",
+    "notifyOnRegister": true,
+    "notifyOnline": true,
+    "suppressMinutes": 15
+  },
+  "storePath": "data/routers.json",
+  "tokensPath": "data/tokens.json",
+  "usersPath": "data/users.json",
+  "auditPath": "data/audit.jsonl"
 }

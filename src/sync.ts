@@ -13,7 +13,7 @@ export async function syncPeers(
   let applied = 0;
   let failed = 0;
   for (const router of store.list()) {
-    if (router.state === "revoked") continue;
+    if (router.state === "revoked" || router.state === "staged") continue;
     try {
       await wg.addPeer(router.publicKey, router.tunnelIp);
       applied++;

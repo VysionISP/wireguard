@@ -15,11 +15,12 @@
     margin: 0; background: var(--bg); color: var(--text);
     font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
   }
-  .wrap { max-width: 1200px; margin: 0 auto; padding: 24px 20px 60px; }
-  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 20px 20px 60px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
   h1 { font-size: 18px; margin: 0; }
-  h1 small { color: var(--muted); font-weight: 400; }
+  h1 small { color: var(--muted); font-weight: 400; font-size: 13px; }
   header .spacer { flex: 1; }
+  header .whoami { color: var(--muted); font-size: 13px; }
   button {
     background: var(--panel2); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 12px; cursor: pointer; font: inherit; font-size: 13px;
@@ -29,22 +30,34 @@
   button.danger:hover { border-color: var(--red); color: var(--red); }
   button:disabled { opacity: .5; cursor: default; }
 
+  nav.tabs { display: flex; gap: 4px; margin: 14px 0 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  nav.tabs button {
+    background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    padding: 8px 14px; color: var(--muted); font-size: 14px;
+  }
+  nav.tabs button:hover { color: var(--text); }
+  nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .adminOnly.hidden { display: none; }
+
   .cards { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
   .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 10px 16px; min-width: 110px;
+    padding: 10px 16px; min-width: 104px;
   }
   .card .num { font-size: 22px; font-weight: 600; }
   .card .lbl { color: var(--muted); font-size: 12px; }
 
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 20px; }
   .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--border); }
-  .panelhead { display: flex; align-items: center; border-bottom: 1px solid var(--border); }
+  .panelhead { display: flex; align-items: center; border-bottom: 1px solid var(--border); gap: 8px; }
   .panelhead h2 { border-bottom: none; flex: 1; }
+  .panelhead input, .panelhead button { margin-right: 0; }
   .panelhead input {
     background: var(--bg); border: 1px solid var(--border); color: var(--text);
-    border-radius: 6px; padding: 5px 10px; font: inherit; font-size: 13px; margin-right: 12px; width: 220px;
+    border-radius: 6px; padding: 5px 10px; font: inherit; font-size: 13px; width: 240px;
   }
+  .panelhead .gap { margin-right: 12px; }
+  .pad { padding: 14px 16px; }
   .tablewrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 8px 10px; white-space: nowrap; }
@@ -56,12 +69,15 @@
   tbody tr:hover { background: var(--panel2); }
   td.actions { text-align: right; }
   td.actions button { margin-left: 5px; padding: 3px 9px; font-size: 12px; }
+  input[type=checkbox] { accent-color: var(--accent); }
 
   .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; border: 1px solid; }
+  .pill.staged { color: var(--muted); border-color: var(--muted); }
   .pill.registered { color: var(--amber); border-color: var(--amber); }
   .pill.confirmed { color: var(--blue); border-color: var(--blue); }
   .pill.verified { color: var(--green); border-color: var(--green); }
   .pill.revoked { color: var(--red); border-color: var(--red); }
+  .role { font-size: 11px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--border); color: var(--muted); }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
   .dot.on { background: var(--green); } .dot.off { background: #444c56; }
 
@@ -73,15 +89,28 @@
     flex: 1; overflow-x: auto; background: var(--bg); border: 1px solid var(--border);
     border-radius: 6px; padding: 8px 10px; white-space: nowrap; display: block;
   }
+  textarea.cmd, textarea.big {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 8px 10px; font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12.5px; resize: vertical; min-height: 70px;
+  }
+  .row2 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field label { color: var(--muted); font-size: 12px; }
+  .field input, .field select {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 13px;
+  }
+  .chips { color: var(--muted); font-size: 12px; }
 
   dialog {
     background: var(--panel); color: var(--text); border: 1px solid var(--border);
-    border-radius: 10px; padding: 0; max-width: 560px; width: calc(100vw - 40px);
+    border-radius: 10px; padding: 0; max-width: 640px; width: calc(100vw - 40px);
   }
   dialog::backdrop { background: rgba(0,0,0,.55); }
   dialog .dhead { display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); }
   dialog .dhead h3 { margin: 0; font-size: 15px; flex: 1; }
-  dialog .dbody { padding: 8px 18px 18px; }
+  dialog .dbody { padding: 8px 18px 18px; max-height: 78vh; overflow-y: auto; }
   .kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; padding: 10px 0; }
   .kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-all; }
   .cred { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-top: 8px; }
@@ -94,25 +123,35 @@
   }
   .meta textarea { resize: vertical; min-height: 54px; }
   .meta label { color: var(--muted); font-size: 12px; }
-  .sub { color: var(--muted); font-size: 12px; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: .05em; }
+  .sub { color: var(--muted); font-size: 12px; margin: 14px 0 4px; text-transform: uppercase; letter-spacing: .05em; }
   .translist, .backlist { font-size: 13px; }
   .translist div, .backlist div { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
   .backlist a { color: var(--accent); cursor: pointer; text-decoration: none; }
   .backlist a:hover { text-decoration: underline; }
+  .signal { display: flex; gap: 16px; flex-wrap: wrap; margin: 4px 0; }
+  .signal .s { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; min-width: 84px; }
+  .signal .s .v { font-size: 17px; font-weight: 600; }
+  .signal .s .k { color: var(--muted); font-size: 11px; }
+  .bar { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; margin-top: 4px; }
+  .bar > i { display: block; height: 100%; background: var(--green); }
+  pre.diff { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 12px; line-height: 1.45; }
+  pre.diff .add { color: var(--green); } pre.diff .del { color: var(--red); } pre.diff .hd { color: var(--accent); }
+  pre.out { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 2px 0 0; font-size: 12px; white-space: pre-wrap; max-height: 160px; overflow-y: auto; }
 
   #login { max-width: 360px; margin: 12vh auto 0; }
   #login .panel { padding: 24px; }
-  #login h1 { margin-bottom: 16px; }
+  #login h1 { margin-bottom: 4px; }
+  #login p.hint { color: var(--muted); font-size: 12.5px; margin: 4px 0 16px; }
   #login input {
     width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
-    border-radius: 6px; padding: 8px 10px; font: inherit; margin: 8px 0 14px;
+    border-radius: 6px; padding: 8px 10px; font: inherit; margin: 6px 0 12px;
   }
   #login .err { color: var(--red); font-size: 13px; min-height: 18px; }
 
   #toast {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
     background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
-    padding: 10px 18px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw;
+    padding: 10px 18px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; z-index: 10;
   }
   #toast.show { opacity: 1; }
   .hidden { display: none !important; }
@@ -130,8 +169,11 @@
 <div id="login" class="hidden">
   <div class="panel">
     <h1>WireGuard Provisioning</h1>
-    <label for="tokenInput">Admin token <span style="color:var(--muted)">(auth.adminToken in config.json)</span></label>
-    <input id="tokenInput" type="password" autocomplete="current-password" placeholder="admin token">
+    <p class="hint">Sign in with your account, or the admin token from config.json (username <code>admin-token</code>… just paste the token as the password).</p>
+    <label for="uInput">Username</label>
+    <input id="uInput" autocomplete="username" placeholder="username (or 'admin' with the token)">
+    <label for="pInput">Password</label>
+    <input id="pInput" type="password" autocomplete="current-password" placeholder="password or admin token">
     <div class="err" id="loginErr"></div>
     <button class="primary" id="loginBtn">Sign in</button>
   </div>
@@ -141,41 +183,157 @@
   <header>
     <h1>MikroTik fleet <small id="refreshed"></small></h1>
     <div class="spacer"></div>
+    <span class="whoami" id="whoami"></span>
     <button id="reloadBtn">Refresh</button>
     <button id="logoutBtn">Sign out</button>
   </header>
 
-  <div class="cards" id="cards"></div>
+  <nav class="tabs">
+    <button data-tab="fleet" class="active">Fleet</button>
+    <button data-tab="bulk" class="adminOnly">Bulk actions</button>
+    <button data-tab="tokens" class="adminOnly">Bootstrap tokens</button>
+    <button data-tab="users" class="adminOnly">Users</button>
+    <button data-tab="audit" class="adminOnly">Audit log</button>
+  </nav>
 
-  <div class="panel" style="margin-bottom:20px">
-    <div class="panelhead">
-      <h2>Routers</h2>
-      <input id="search" type="search" placeholder="search label, serial, identity, IP…">
+  <!-- FLEET -->
+  <section id="tab-fleet">
+    <div class="cards" id="cards"></div>
+    <div class="panel">
+      <div class="panelhead">
+        <h2>Routers</h2>
+        <input id="search" type="search" placeholder="search label, serial, identity, IP…">
+        <button id="csvBtn" class="gap">Export CSV</button>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>Tunnel</th><th>Label</th><th>Serial</th><th>Identity</th>
+            <th>Mgmt IP</th><th>State</th><th>Handshake</th><th>Last seen</th><th></th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="empty hidden" id="empty">No routers yet — issue a bootstrap token below and run it on a fresh device.</div>
+      </div>
     </div>
-    <div class="tablewrap">
-      <table>
-        <thead><tr>
-          <th>Tunnel</th><th>Label</th><th>Serial</th><th>Identity</th>
-          <th>Mgmt IP</th><th>State</th><th>Handshake</th><th>Last seen</th><th></th>
-        </tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-      <div class="empty hidden" id="empty">No routers yet — run the bootstrap one-liner below on a fresh device.</div>
+    <div class="panel adminOnly">
+      <h2>Pre-stage a router</h2>
+      <div class="pad row2">
+        <div class="field"><label>Serial number</label><input id="psSerial" placeholder="e.g. HGB09ABC456"></div>
+        <div class="field" style="flex:1;min-width:200px"><label>Label (customer / site)</label><input id="psLabel" placeholder="Smith residence — Ballarat"></div>
+        <button class="primary" id="psBtn" style="align-self:flex-end">Stage</button>
+      </div>
+      <div class="pad chips" style="padding-top:0">Staged routers get their label the moment they register. Pair with a one-time token below.</div>
     </div>
-  </div>
+    <div class="panel">
+      <h2>Quick bootstrap</h2>
+      <div class="boot">
+        <code class="mono" id="oneliner">…</code>
+        <button id="copyBoot">Copy</button>
+      </div>
+      <div class="pad chips" style="padding-top:0" id="bootHint"></div>
+    </div>
+  </section>
 
-  <div class="panel">
-    <h2>Bootstrap a new router</h2>
-    <div class="boot">
-      <code class="mono" id="oneliner">…</code>
-      <button id="copyBoot">Copy</button>
+  <!-- BULK -->
+  <section id="tab-bulk" class="hidden">
+    <div class="panel">
+      <h2>Run a command on many routers (SSH over the tunnel)</h2>
+      <div class="pad">
+        <div class="row2" style="margin-bottom:8px">
+          <label><input type="checkbox" id="bulkAll" checked> All online routers</label>
+          <span class="chips" id="bulkTargetInfo"></span>
+        </div>
+        <div class="chips" style="margin-bottom:6px">Presets:
+          <button data-preset="/system/identity/print"></button>
+          <button data-preset="/system/resource/print"></button>
+          <button data-preset="/ip/dns/set servers=1.1.1.1,8.8.8.8"></button>
+          <button data-preset="/system/package/update/check-for-updates"></button>
+          <button data-preset="/system/reboot"></button>
+        </div>
+        <textarea class="cmd" id="bulkCmd" placeholder="/system/identity/print"></textarea>
+        <div class="row2" style="margin-top:8px">
+          <button class="primary" id="bulkRun">Run</button>
+          <span class="chips">Runs as the wg-mgmt user, 5 routers at a time. Output is captured below.</span>
+        </div>
+      </div>
     </div>
-  </div>
+    <div class="panel hidden" id="bulkResultsPanel">
+      <h2>Results</h2>
+      <div class="pad" id="bulkResults"></div>
+    </div>
+  </section>
+
+  <!-- TOKENS -->
+  <section id="tab-tokens" class="hidden">
+    <div class="panel">
+      <h2>Issue a one-time bootstrap token</h2>
+      <div class="pad row2">
+        <div class="field" style="flex:1;min-width:200px"><label>Note (who / what it's for)</label><input id="tkNote" placeholder="Smith install — truck 3"></div>
+        <div class="field"><label>Valid for (hours)</label><input id="tkTtl" type="number" value="72" style="width:100px"></div>
+        <button class="primary" id="tkBtn" style="align-self:flex-end">Generate</button>
+      </div>
+      <div class="pad chips" style="padding-top:0">Each token registers exactly one router, then burns. Use these instead of the shared token so a leaked script can't onboard rogue devices.</div>
+    </div>
+    <div class="panel">
+      <h2>Tokens</h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Note</th><th>Status</th><th>Created by</th><th>Expires</th><th>Used by</th><th></th></tr></thead>
+          <tbody id="tokenRows"></tbody>
+        </table>
+        <div class="empty hidden" id="tokenEmpty">No tokens yet.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- USERS -->
+  <section id="tab-users" class="hidden">
+    <div class="panel">
+      <h2>Add a dashboard user</h2>
+      <div class="pad row2">
+        <div class="field"><label>Username</label><input id="usName" placeholder="tech1"></div>
+        <div class="field"><label>Password (blank = generate)</label><input id="usPass" type="text" placeholder="min 8 chars"></div>
+        <div class="field"><label>Role</label><select id="usRole"><option value="tech">tech</option><option value="admin">admin</option></select></div>
+        <button class="primary" id="usBtn" style="align-self:flex-end">Add</button>
+      </div>
+      <div class="pad chips" style="padding-top:0"><b>tech</b> = view, verify, live stats, backups. <b>admin</b> = everything (revoke, bulk, tokens, users, restore).</div>
+    </div>
+    <div class="panel">
+      <h2>Users</h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Username</th><th>Role</th><th>Created</th><th></th></tr></thead>
+          <tbody id="userRows"></tbody>
+        </table>
+        <div class="empty hidden" id="userEmpty">No named users yet — only the admin token can sign in.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AUDIT -->
+  <section id="tab-audit" class="hidden">
+    <div class="panel">
+      <div class="panelhead"><h2>Audit log</h2><button id="auditReload" class="gap">Reload</button></div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>When</th><th>User</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
+          <tbody id="auditRows"></tbody>
+        </table>
+        <div class="empty hidden" id="auditEmpty">Nothing logged yet.</div>
+      </div>
+    </div>
+  </section>
 </div>
 
 <dialog id="details">
   <div class="dhead"><h3 id="dTitle"></h3><button onclick="document.getElementById('details').close()">Close</button></div>
   <div class="dbody" id="dBody"></div>
+</dialog>
+
+<dialog id="modal">
+  <div class="dhead"><h3 id="mTitle"></h3><button onclick="document.getElementById('modal').close()">Close</button></div>
+  <div class="dbody" id="mBody"></div>
 </dialog>
 
 <div id="toast"></div>
@@ -184,17 +342,20 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let token = localStorage.getItem("mtprov.token") || "";
+let me = null;            // {username, role}
+let allRouters = [];
 let timer = null;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const isAdmin = () => me && me.role === "admin";
 
 function toast(msg) {
   const t = $("toast");
   t.textContent = msg;
   t.classList.add("show");
   clearTimeout(t._h);
-  t._h = setTimeout(() => t.classList.remove("show"), 3500);
+  t._h = setTimeout(() => t.classList.remove("show"), 4000);
 }
 
 async function api(path, opts = {}) {
@@ -202,21 +363,23 @@ async function api(path, opts = {}) {
     ...opts,
     headers: { authorization: "Bearer " + token, ...(opts.headers || {}) },
   });
-  if (res.status === 401) { showLogin("Invalid or expired token"); throw new Error("unauthorized"); }
+  if (res.status === 401) { showLogin("Session expired — sign in again"); throw new Error("unauthorized"); }
   if (!res.ok) {
     let msg = res.status + " " + res.statusText;
     try { msg = (await res.json()).error || msg; } catch {}
     throw new Error(msg);
   }
-  return res.json();
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("json") ? res.json() : res.text();
 }
 
 function showLogin(err) {
   clearInterval(timer);
+  me = null;
   $("app").classList.add("hidden");
   $("login").classList.remove("hidden");
   $("loginErr").textContent = err || "";
-  $("tokenInput").focus();
+  $("uInput").focus();
 }
 
 function fmtAge(sec) {
@@ -231,9 +394,26 @@ function fmtDate(iso) {
   const d = new Date(iso);
   return d.toLocaleDateString() + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
+function fmtBytes(n) {
+  if (!n) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(n) / Math.log(1024));
+  return (n / 1024 ** i).toFixed(i ? 1 : 0) + " " + u[i];
+}
 const online = (r) => r.online ?? (r.handshakeAge != null && r.handshakeAge < 180);
-let allRouters = [];
 
+/* ---------------- tabs ---------------- */
+function showTab(name) {
+  for (const s of document.querySelectorAll("section[id^=tab-]")) s.classList.add("hidden");
+  $("tab-" + name).classList.remove("hidden");
+  for (const b of document.querySelectorAll("nav.tabs button")) b.classList.toggle("active", b.dataset.tab === name);
+  if (name === "tokens") loadTokens();
+  if (name === "users") loadUsers();
+  if (name === "audit") loadAudit();
+  if (name === "bulk") updateBulkInfo();
+}
+
+/* ---------------- fleet ---------------- */
 function matches(r, q) {
   if (!q) return true;
   return [r.label, r.serialNumber, r.identity, r.tunnelIp, r.boardName, r.notes]
@@ -248,32 +428,36 @@ function render() {
   const counts = {
     total: active.length,
     online: routers.filter(online).length,
-    verified: active.filter((r) => r.state === "verified").length,
+    staged: routers.filter((r) => r.state === "staged").length,
     revoked: routers.filter((r) => r.state === "revoked").length,
   };
   $("cards").innerHTML = [
     ["Routers", counts.total], ["Online", counts.online],
-    ["Verified", counts.verified], ["Revoked", counts.revoked],
+    ["Staged", counts.staged], ["Revoked", counts.revoked],
   ].map(([l, n]) => `<div class="card"><div class="num">${n}</div><div class="lbl">${l}</div></div>`).join("");
 
   $("empty").classList.toggle("hidden", shown.length > 0);
   if (routers.length > 0 && shown.length === 0) $("empty").textContent = "No routers match the search.";
-  $("rows").innerHTML = shown.map((r) => `
+  $("rows").innerHTML = shown.map((r) => {
+    const staged = r.state === "staged";
+    return `
     <tr>
-      <td><span class="dot ${online(r) ? "on" : "off"}"></span>${online(r) ? "up" : "down"}</td>
+      <td>${staged ? '<span class="chips">—</span>' : `<span class="dot ${online(r) ? "on" : "off"}"></span>${online(r) ? "up" : "down"}`}</td>
       <td>${r.label ? esc(r.label) : '<span style="color:var(--muted)">—</span>'}</td>
       <td class="mono">${esc(r.serialNumber)}</td>
       <td>${esc(r.identity)}</td>
-      <td class="mono">${esc(r.tunnelIp)}</td>
+      <td class="mono">${r.tunnelIp ? esc(r.tunnelIp) : "—"}</td>
       <td><span class="pill ${esc(r.state)}">${esc(r.state)}</span></td>
-      <td>${fmtAge(r.handshakeAge)}</td>
+      <td>${staged ? "—" : fmtAge(r.handshakeAge)}</td>
       <td>${fmtDate(r.lastSeenAt)}</td>
       <td class="actions">
         <button data-act="details" data-ref="${esc(r.id)}">Details</button>
-        <button data-act="verify" data-ref="${esc(r.id)}" ${r.state === "revoked" ? "disabled" : ""}>Verify</button>
-        <button class="danger" data-act="revoke" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" ${r.state === "revoked" ? "disabled" : ""}>Revoke</button>
+        ${staged ? "" : `<button data-act="live" data-ref="${esc(r.id)}">Live</button>`}
+        <button data-act="verify" data-ref="${esc(r.id)}" ${staged || r.state === "revoked" ? "disabled" : ""}>Verify</button>
+        ${isAdmin() ? `<button class="danger" data-act="revoke" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" ${r.state === "revoked" ? "disabled" : ""}>Revoke</button>` : ""}
       </td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
 }
 
 async function load() {
@@ -281,22 +465,28 @@ async function load() {
   allRouters = routers;
   render();
   $("oneliner").textContent = boot.oneLiner;
+  $("bootHint").textContent = boot.masterTokenAllowed
+    ? "This uses the shared master token. For per-install tokens that burn after one use, see the Bootstrap tokens tab."
+    : "Master token is disabled — generate a one-time token in the Bootstrap tokens tab to onboard a router.";
   $("refreshed").textContent = "updated " + new Date().toLocaleTimeString();
 }
 
-async function start() {
-  try { await load(); } catch (e) { if (e.message !== "unauthorized") toast(e.message); return; }
-  $("login").classList.add("hidden");
-  $("app").classList.remove("hidden");
-  clearInterval(timer);
-  timer = setInterval(() => { if (!document.hidden) load().catch(() => {}); }, 15000);
+function exportCsv() {
+  const cols = ["serialNumber", "label", "identity", "boardName", "rosVersion", "tunnelIp", "state", "lastSeenAt", "lastBackupAt", "notes"];
+  const rows = [cols.join(",")];
+  for (const r of allRouters) {
+    rows.push(cols.map((c) => {
+      const v = r[c] == null ? "" : String(r[c]);
+      return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+    }).join(","));
+  }
+  const url = URL.createObjectURL(new Blob([rows.join("\n")], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = "mikrotik-fleet.csv"; a.click();
+  URL.revokeObjectURL(url);
 }
 
-async function copy(text, what) {
-  try { await navigator.clipboard.writeText(text); toast(what + " copied"); }
-  catch { toast("Copy failed — select it manually"); }
-}
-
+/* ---------------- details ---------------- */
 async function openDetails(ref) {
   const [r, backups] = await Promise.all([
     api("/api/routers/" + encodeURIComponent(ref)),
@@ -304,13 +494,13 @@ async function openDetails(ref) {
   ]);
   $("dTitle").textContent = r.serialNumber + (r.label ? " — " + r.label : " — " + r.identity);
   const transitions = (r.transitions || []).slice(-6).reverse();
+  const backOpts = backups.map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
   $("dBody").innerHTML = `
     <dl class="kv">
       <dt>State</dt><dd><span class="pill ${esc(r.state)}">${esc(r.state)}</span></dd>
       <dt>Board</dt><dd>${esc(r.boardName)} (ROS ${esc(r.rosVersion)})</dd>
       <dt>Identity</dt><dd>${esc(r.identity)}</dd>
-      <dt>Mgmt IP</dt><dd class="mono">${esc(r.tunnelIp)}</dd>
-      <dt>Public key</dt><dd class="mono">${esc(r.publicKey)}</dd>
+      <dt>Mgmt IP</dt><dd class="mono">${r.tunnelIp ? esc(r.tunnelIp) : "— (not registered yet)"}</dd>
       <dt>Handshake</dt><dd>${fmtAge(r.handshakeAge)}</dd>
       <dt>Registered</dt><dd>${fmtDate(r.createdAt)}</dd>
       <dt>Last seen</dt><dd>${fmtDate(r.lastSeenAt)}</dd>
@@ -323,7 +513,7 @@ async function openDetails(ref) {
       <textarea id="mNotes" placeholder="anything worth remembering about this install">${esc(r.notes || "")}</textarea>
       <button class="primary" data-act="savemeta" data-ref="${esc(r.id)}">Save</button>
     </div>
-    <div class="cred">
+    ${r.tunnelIp ? `<div class="cred">
       <div class="row"><span>ssh</span><code class="mono">ssh ${esc(r.username)}@${esc(r.tunnelIp)}</code>
         <button data-copy="ssh ${esc(r.username)}@${esc(r.tunnelIp)}">Copy</button></div>
       <div class="row"><span>user</span><code class="mono">${esc(r.username)}</code>
@@ -332,7 +522,7 @@ async function openDetails(ref) {
         <button data-copy="${esc(r.password)}">Copy</button></div>
       <div class="row"><span>REST</span><code class="mono">http://${esc(r.tunnelIp)}/rest/</code>
         <button data-copy="http://${esc(r.tunnelIp)}/rest/">Copy</button></div>
-    </div>
+    </div>` : ""}
     ${transitions.length ? `<div class="sub">Recent connectivity</div>
     <div class="translist">${transitions.map((t) => `
       <div><span class="dot ${t.online ? "on" : "off"}"></span> went ${t.online ? "online" : "offline"} — ${fmtDate(t.at)}</div>`).join("")}
@@ -342,7 +532,16 @@ async function openDetails(ref) {
       <div><a data-dl="${esc(b.name)}" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">${esc(b.name)}</a>
       <span style="color:var(--muted)">${(b.size / 1024).toFixed(1)} KB</span></div>`).join("")
       : '<div style="color:var(--muted)">none yet — the router pushes its config on schedule after provisioning</div>'}
-    </div>`;
+    </div>
+    ${backups.length >= 2 ? `<div class="sub">Compare versions</div>
+      <div class="row2">
+        <select id="diffA">${backOpts}</select>
+        <span class="chips">vs</span>
+        <select id="diffB">${backOpts}</select>
+        <button data-act="diff" data-ref="${esc(r.id)}">Diff</button>
+        ${isAdmin() ? `<button data-act="restore" data-ref="${esc(r.id)}" class="danger">Stage restore…</button>` : ""}
+      </div>` : ""}`;
+  if (backups.length >= 2) { $("diffB").selectedIndex = 1; }
   $("details").showModal();
 }
 
@@ -364,59 +563,301 @@ async function downloadBackup(ref, serial, name) {
   if (!res.ok) return toast("Download failed");
   const url = URL.createObjectURL(await res.blob());
   const a = document.createElement("a");
-  a.href = url;
-  a.download = `${serial}-${name}`;
-  a.click();
+  a.href = url; a.download = `${serial}-${name}`; a.click();
   URL.revokeObjectURL(url);
+}
+
+function renderDiff(patch) {
+  return patch.split("\n").map((l) => {
+    const c = l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : l.startsWith("@") ? "hd" : "";
+    return c ? `<span class="${c}">${esc(l)}</span>` : esc(l);
+  }).join("\n");
+}
+
+async function showDiff(ref) {
+  const a = $("diffA").value, b = $("diffB").value;
+  if (a === b) return toast("Pick two different versions");
+  const patch = await api(`/api/routers/${encodeURIComponent(ref)}/backups-diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
+  $("mTitle").textContent = "Diff";
+  $("mBody").innerHTML = patch.trim()
+    ? `<pre class="diff">${renderDiff(patch)}</pre>`
+    : '<p class="chips">No differences.</p>';
+  $("modal").showModal();
+}
+
+async function stageRestore(ref) {
+  const name = $("diffA").value;
+  if (!confirm(`Upload backup "${name}" to the router as wg-restore.rsc? It is NOT applied automatically — you review and /import it manually.`)) return;
+  const r = await api(`/api/routers/${encodeURIComponent(ref)}/restore`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  $("mTitle").textContent = "Restore staged";
+  $("mBody").innerHTML = `<p>${esc(r.instructions)}</p>`;
+  $("modal").showModal();
+}
+
+/* ---------------- live stats ---------------- */
+function signalTile(k, v, pct) {
+  return `<div class="s"><div class="v">${esc(v)}</div><div class="k">${esc(k)}</div>${
+    pct != null ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></div>` : ""}</div>`;
+}
+async function openLive(ref) {
+  $("mTitle").textContent = "Live stats";
+  $("mBody").innerHTML = '<p class="chips">Querying the router over the tunnel…</p>';
+  $("modal").showModal();
+  let s;
+  try { s = await api("/api/routers/" + encodeURIComponent(ref) + "/live"); }
+  catch (e) { $("mBody").innerHTML = `<p class="chips">${esc(e.message)}</p>`; return; }
+  const memUsed = s.resource.totalMemory - s.resource.freeMemory;
+  const memPct = s.resource.totalMemory ? (memUsed / s.resource.totalMemory) * 100 : 0;
+  let lteHtml = "";
+  for (const l of s.lte) {
+    const rsrp = Number(l.rsrp), rsrq = Number(l.rsrq), sinr = Number(l.sinr);
+    lteHtml += `<div class="sub">LTE / 5G — ${esc(l.interface || "")}</div><div class="signal">
+      ${l.rsrp != null ? signalTile("RSRP", l.rsrp + " dBm", ((rsrp + 120) / 76) * 100) : ""}
+      ${l.rsrq != null ? signalTile("RSRQ", l.rsrq + " dB", ((rsrq + 20) / 17) * 100) : ""}
+      ${l.sinr != null ? signalTile("SINR", l.sinr + " dB", ((sinr + 10) / 40) * 100) : ""}
+      ${l.rssi != null ? signalTile("RSSI", l.rssi + " dBm") : ""}
+      ${l["current-operator"] || l.operator ? signalTile("Operator", l["current-operator"] || l.operator) : ""}
+      ${l["access-technology"] ? signalTile("Tech", l["access-technology"]) : ""}
+      ${l.band ? signalTile("Band", l.band) : ""}
+    </div>`;
+  }
+  const ifaces = s.interfaces.filter((i) => i.type !== "wg" || i.running).slice(0, 14);
+  $("mBody").innerHTML = `
+    <div class="signal">
+      ${signalTile("Uptime", s.resource.uptime)}
+      ${signalTile("CPU", s.resource.cpuLoad + "%", s.resource.cpuLoad)}
+      ${signalTile("Memory", fmtBytes(memUsed) + " / " + fmtBytes(s.resource.totalMemory), memPct)}
+      ${signalTile("ROS", s.resource.version)}
+    </div>
+    ${lteHtml}
+    <div class="sub">Interfaces</div>
+    <div class="tablewrap"><table><thead><tr><th>Name</th><th>Type</th><th>State</th><th>RX</th><th>TX</th></tr></thead>
+      <tbody>${ifaces.map((i) => `<tr>
+        <td class="mono">${esc(i.name)}</td><td>${esc(i.type)}</td>
+        <td><span class="dot ${i.running ? "on" : "off"}"></span>${i.running ? "up" : "down"}</td>
+        <td>${fmtBytes(i.rxByte)}</td><td>${fmtBytes(i.txByte)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+/* ---------------- bulk ---------------- */
+function updateBulkInfo() {
+  const online = allRouters.filter((r) => r.online).length;
+  $("bulkTargetInfo").textContent = $("bulkAll").checked
+    ? `${online} online router(s) will run this.`
+    : "Uncheck runs against all non-revoked routers (offline ones will simply fail to connect).";
+}
+async function runBulk() {
+  const command = $("bulkCmd").value.trim();
+  if (!command) return toast("Enter a command");
+  if (/reboot|reset|shutdown/i.test(command) && !confirm("This command looks disruptive. Run it on the fleet?")) return;
+  $("bulkRun").disabled = true; $("bulkRun").textContent = "Running…";
+  try {
+    const { results } = await api("/api/bulk", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ command }),
+    });
+    $("bulkResultsPanel").classList.remove("hidden");
+    const ok = results.filter((r) => r.ok).length;
+    $("bulkResults").innerHTML = `<div class="chips" style="margin-bottom:8px">${ok}/${results.length} succeeded</div>` +
+      results.map((r) => `
+        <div style="margin-bottom:10px">
+          <div><span class="dot ${r.ok ? "on" : "off"}"></span><b>${esc(r.label || r.serialNumber)}</b>
+          <span class="chips">${esc(r.serialNumber)}</span></div>
+          <pre class="out">${esc(r.output || "(no output)")}</pre>
+        </div>`).join("");
+  } catch (e) { toast(e.message); }
+  finally { $("bulkRun").disabled = false; $("bulkRun").textContent = "Run"; }
+}
+
+/* ---------------- tokens ---------------- */
+async function loadTokens() {
+  const list = await api("/api/tokens");
+  $("tokenEmpty").classList.toggle("hidden", list.length > 0);
+  $("tokenRows").innerHTML = list.map((t) => {
+    const status = t.usedAt ? "used" : (t.expiresAt && Date.parse(t.expiresAt) < Date.now()) ? "expired" : "active";
+    return `<tr>
+      <td>${esc(t.note || "—")}</td>
+      <td><span class="pill ${status === "active" ? "verified" : status === "used" ? "confirmed" : "revoked"}">${status}</span></td>
+      <td>${esc(t.createdBy)}</td>
+      <td>${t.expiresAt ? fmtDate(t.expiresAt) : "never"}</td>
+      <td class="mono">${t.usedBySerial ? esc(t.usedBySerial) : "—"}</td>
+      <td class="actions">
+        ${status === "active" ? `<button data-tkcopy="${esc(t.token)}">Copy one-liner</button>` : ""}
+        <button class="danger" data-tkdel="${esc(t.token)}">Delete</button>
+      </td></tr>`;
+  }).join("");
+}
+async function createToken() {
+  const note = $("tkNote").value.trim();
+  const ttlHours = Number($("tkTtl").value) || 72;
+  const t = await api("/api/tokens", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ note, ttlHours }),
+  });
+  $("tkNote").value = "";
+  $("mTitle").textContent = "One-time bootstrap token";
+  $("mBody").innerHTML = `
+    <p>Run this on the fresh router — it works once, then burns:</p>
+    <div class="boot" style="padding:0"><code class="mono" id="newTk">${esc(t.oneLiner)}</code>
+    <button data-copy="${esc(t.oneLiner)}">Copy</button></div>
+    <p class="chips" style="margin-top:10px">Expires ${t.expiresAt ? fmtDate(t.expiresAt) : "never"}.</p>`;
+  $("modal").showModal();
+  loadTokens();
+}
+
+/* ---------------- users ---------------- */
+async function loadUsers() {
+  const list = await api("/api/users");
+  $("userEmpty").classList.toggle("hidden", list.length > 0);
+  $("userRows").innerHTML = list.map((u) => `<tr>
+    <td>${esc(u.username)}</td><td><span class="role">${esc(u.role)}</span></td>
+    <td>${fmtDate(u.createdAt)}</td>
+    <td class="actions"><button class="danger" data-usdel="${esc(u.username)}">Remove</button></td>
+  </tr>`).join("");
+}
+async function addUser() {
+  const username = $("usName").value.trim();
+  const password = $("usPass").value;
+  const role = $("usRole").value;
+  if (!username) return toast("Enter a username");
+  try {
+    const r = await api("/api/users", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, role, password: password || undefined }),
+    });
+    $("usName").value = ""; $("usPass").value = "";
+    $("mTitle").textContent = "User created";
+    $("mBody").innerHTML = `<p><b>${esc(r.username)}</b> can now sign in.</p>
+      <div class="cred"><div class="row"><span>password</span><code class="mono">${esc(r.password)}</code>
+      <button data-copy="${esc(r.password)}">Copy</button></div></div>
+      <p class="chips" style="margin-top:8px">Shown once — share it securely.</p>`;
+    $("modal").showModal();
+    loadUsers();
+  } catch (e) { toast(e.message); }
+}
+
+/* ---------------- audit ---------------- */
+async function loadAudit() {
+  const list = await api("/api/audit");
+  $("auditEmpty").classList.toggle("hidden", list.length > 0);
+  $("auditRows").innerHTML = list.map((e) => `<tr>
+    <td>${fmtDate(e.at)}</td><td>${esc(e.user)}</td>
+    <td class="mono">${esc(e.action)}</td><td class="mono">${esc(e.target)}</td>
+    <td>${esc(e.detail || "")}</td></tr>`).join("");
+}
+
+/* ---------------- events ---------------- */
+async function copy(text, what) {
+  try { await navigator.clipboard.writeText(text); toast((what || "Value") + " copied"); }
+  catch { toast("Copy failed — select it manually"); }
 }
 
 document.addEventListener("click", async (ev) => {
   const link = ev.target.closest("a[data-dl]");
-  if (link) {
-    ev.preventDefault();
-    return downloadBackup(link.dataset.ref, link.dataset.serial, link.dataset.dl).catch((e) => toast(e.message));
-  }
+  if (link) { ev.preventDefault(); return downloadBackup(link.dataset.ref, link.dataset.serial, link.dataset.dl).catch((e) => toast(e.message)); }
   const btn = ev.target.closest("button");
   if (!btn) return;
-  if (btn.dataset.copy != null) return copy(btn.dataset.copy, "Value");
-  const { act, ref } = btn.dataset;
+  const d = btn.dataset;
+  if (d.copy != null) return copy(d.copy);
+  if (d.tkcopy != null) { const t = await api("/api/bootstrap-info").catch(() => null); return copy(location.origin ? `/tool fetch url="${location.origin}/bootstrap.rsc?token=${d.tkcopy}" dst-path=bootstrap.rsc; :delay 2s; /import bootstrap.rsc` : d.tkcopy, "One-liner"); }
+  if (d.tkdel != null) { if (confirm("Delete this token?")) { await api("/api/tokens/" + encodeURIComponent(d.tkdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadTokens(); } return; }
+  if (d.usdel != null) { if (confirm(`Remove user ${d.usdel}?`)) { await api("/api/users/" + encodeURIComponent(d.usdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadUsers(); } return; }
+  if (d.preset != null) { $("bulkCmd").value = d.preset; return; }
+  const { act, ref } = d;
   if (!act) return;
   try {
     if (act === "details") await openDetails(ref);
     if (act === "savemeta") await saveMeta(ref);
+    if (act === "live") await openLive(ref);
+    if (act === "diff") await showDiff(ref);
+    if (act === "restore") await stageRestore(ref);
     if (act === "verify") {
       btn.disabled = true; btn.textContent = "…";
       const v = await api("/api/routers/" + encodeURIComponent(ref) + "/verify", { method: "POST" });
-      toast(v.reachable
-        ? `Reachable: ${v.info.identity} (ROS ${v.info.version}, up ${v.info.uptime})`
-        : `Not reachable: ${v.error}`);
+      toast(v.reachable ? `Reachable: ${v.info.identity} (ROS ${v.info.version}, up ${v.info.uptime})` : `Not reachable: ${v.error}`);
       await load();
     }
     if (act === "revoke") {
-      if (!confirm(`Revoke ${btn.dataset.serial}? Its tunnel drops and it can never re-register.`)) return;
+      if (!confirm(`Revoke ${d.serial}? Its tunnel drops and it can never re-register.`)) return;
       await api("/api/routers/" + encodeURIComponent(ref) + "/revoke", { method: "POST" });
-      toast("Revoked " + btn.dataset.serial);
+      toast("Revoked " + d.serial);
       await load();
     }
-  } catch (e) {
-    if (e.message !== "unauthorized") toast(e.message);
-  } finally {
-    if (act === "verify") { btn.disabled = false; btn.textContent = "Verify"; }
-  }
+  } catch (e) { if (e.message !== "unauthorized") toast(e.message); }
+  finally { if (act === "verify") { btn.disabled = false; btn.textContent = "Verify"; } }
 });
 
-$("loginBtn").addEventListener("click", () => {
-  token = $("tokenInput").value.trim();
-  localStorage.setItem("mtprov.token", token);
-  start();
-});
-$("tokenInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("loginBtn").click(); });
-$("logoutBtn").addEventListener("click", () => {
+for (const b of document.querySelectorAll("nav.tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
+
+async function doLogin() {
+  const username = $("uInput").value.trim();
+  const password = $("pInput").value;
+  // Admin-token path: username "admin"/"admin-token" + token as password, or blank username.
+  if (!username || username === "admin" || username === "admin-token") {
+    token = password.trim();
+    localStorage.setItem("mtprov.token", token);
+    return start();
+  }
+  try {
+    const r = await fetch("/api/login", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!r.ok) { $("loginErr").textContent = "Invalid username or password"; return; }
+    const data = await r.json();
+    token = data.session;
+    localStorage.setItem("mtprov.token", token);
+    start();
+  } catch (e) { $("loginErr").textContent = e.message; }
+}
+
+async function start() {
+  try {
+    me = await api("/api/me");
+  } catch (e) {
+    if (e.message !== "unauthorized") { showLogin(e.message); }
+    return;
+  }
+  $("login").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  $("whoami").textContent = `${me.username} · ${me.role}`;
+  for (const el of document.querySelectorAll(".adminOnly")) el.classList.toggle("hidden", !isAdmin());
+  showTab("fleet");
+  try { await load(); } catch (e) { if (e.message !== "unauthorized") toast(e.message); }
+  clearInterval(timer);
+  timer = setInterval(() => { if (!document.hidden && !$("tab-fleet").classList.contains("hidden")) load().catch(() => {}); }, 15000);
+}
+
+$("loginBtn").addEventListener("click", doLogin);
+$("pInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
+$("uInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("pInput").focus(); });
+$("logoutBtn").addEventListener("click", async () => {
+  await api("/api/logout", { method: "POST" }).catch(() => {});
   localStorage.removeItem("mtprov.token"); token = ""; showLogin();
 });
 $("reloadBtn").addEventListener("click", () => load().catch((e) => toast(e.message)));
-$("search").addEventListener("input", () => render());
-$("copyBoot").addEventListener("click", () => copy($("oneliner").textContent, "Bootstrap one-liner"));
+$("search").addEventListener("input", render);
+$("csvBtn").addEventListener("click", exportCsv);
+$("bulkAll").addEventListener("change", updateBulkInfo);
+$("bulkRun").addEventListener("click", runBulk);
+$("tkBtn").addEventListener("click", () => createToken().catch((e) => toast(e.message)));
+$("usBtn").addEventListener("click", addUser);
+$("auditReload").addEventListener("click", () => loadAudit().catch((e) => toast(e.message)));
+$("psBtn").addEventListener("click", async () => {
+  const serialNumber = $("psSerial").value.trim();
+  const label = $("psLabel").value.trim();
+  if (!serialNumber) return toast("Enter a serial number");
+  try {
+    await api("/api/prestage", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ serialNumber, label }) });
+    $("psSerial").value = ""; $("psLabel").value = "";
+    toast("Staged " + serialNumber);
+    await load();
+  } catch (e) { toast(e.message); }
+});
+// Fill preset button labels (kept out of HTML to avoid escaping noise).
+for (const b of document.querySelectorAll("button[data-preset]")) if (!b.textContent) b.textContent = b.dataset.preset.split(" ")[0].split("/").slice(-1)[0] || b.dataset.preset;
 
 if (token) start(); else showLogin();
 </script>

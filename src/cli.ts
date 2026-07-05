@@ -8,6 +8,9 @@ import { renderBootstrap, renderOneLiner } from "./templates.js";
 import { revokeRouter, verifyRouter } from "./actions.js";
 import { syncPeers } from "./sync.js";
 import { startMonitor } from "./monitor.js";
+import { Alerter } from "./alerts.js";
+import { TokenStore } from "./tokens.js";
+import { UserStore } from "./users.js";
 
 function makeWg(config: Config): WireguardManager {
   return config.wireguard.applyMode === "wg"
@@ -35,8 +38,10 @@ program
     // re-apply the whole inventory before accepting traffic.
     const { applied, failed } = await syncPeers(store, wg);
     if (applied || failed) console.log(`peer sync: ${applied} applied, ${failed} failed`);
-    const app = buildApp({ config, store, wg });
-    startMonitor(store, wg, config.monitor.intervalSeconds, config.monitor.offlineAfterSeconds);
+    const alerter = new Alerter(config.alerts);
+    const app = buildApp({ config, store, wg, alerter });
+    startMonitor(store, wg, config.monitor.intervalSeconds, config.monitor.offlineAfterSeconds, alerter);
+    if (alerter.enabled) console.log("alerts: enabled");
     app.listen(config.server.port, config.server.host, () => {
       console.log(
         `provisioning server listening on ${config.server.host}:${config.server.port} (public: ${config.server.publicUrl})`,
@@ -122,6 +127,95 @@ program
       console.error(`reachable: no — ${result.error}`);
       process.exitCode = 1;
     }
+  });
+
+const user = program.command("user").description("manage dashboard users");
+
+user
+  .command("add <username> <role>")
+  .description("add a dashboard user (role: admin or tech); prints a generated password")
+  .option("--password <password>", "set an explicit password instead")
+  .action((username: string, role: string, opts: { password?: string }) => {
+    if (role !== "admin" && role !== "tech") {
+      console.error('role must be "admin" or "tech"');
+      process.exitCode = 1;
+      return;
+    }
+    const { config } = open(program.opts().config);
+    const users = new UserStore(config.usersPath);
+    const password =
+      opts.password ?? Buffer.from(crypto.getRandomValues(new Uint8Array(12))).toString("base64url");
+    users.add(username, password, role);
+    console.log(`user "${username}" (${role}) created`);
+    if (!opts.password) console.log(`password: ${password}  (store it now — it is not shown again)`);
+  });
+
+user
+  .command("list")
+  .description("list dashboard users")
+  .action(() => {
+    const { config } = open(program.opts().config);
+    const users = new UserStore(config.usersPath).list();
+    if (users.length === 0) {
+      console.log("no users — the dashboard accepts the admin token from config.json");
+      return;
+    }
+    console.table(users);
+  });
+
+user
+  .command("rm <username>")
+  .description("remove a dashboard user")
+  .action((username: string) => {
+    const { config } = open(program.opts().config);
+    if (new UserStore(config.usersPath).remove(username)) console.log(`removed ${username}`);
+    else {
+      console.error(`no user "${username}"`);
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("token [note...]")
+  .description("issue a one-time bootstrap token and print its one-liner")
+  .option("--ttl <hours>", "token validity in hours", "72")
+  .action((noteWords: string[] = [], opts: { ttl: string }) => {
+    const { config } = open(program.opts().config);
+    const tokens = new TokenStore(config.tokensPath);
+    const t = tokens.create(noteWords.join(" "), "cli", Number(opts.ttl) || 72);
+    console.log(`one-time token (expires ${t.expiresAt}):\n`);
+    console.log(`  ${renderOneLiner(config, t.token)}\n`);
+  });
+
+program
+  .command("prestage <serial> [label...]")
+  .description("pre-stage a router by serial so it gets its label the moment it registers")
+  .action((serial: string, labelWords: string[] = []) => {
+    const { config, store } = open(program.opts().config);
+    if (store.findBySerial(serial)) {
+      console.error(`serial ${serial} already exists`);
+      process.exitCode = 1;
+      return;
+    }
+    const now = new Date().toISOString();
+    store.save({
+      id: crypto.randomUUID(),
+      serialNumber: serial,
+      publicKey: "",
+      boardName: "unknown",
+      rosVersion: "unknown",
+      identity: "MikroTik",
+      tunnelIp: "",
+      username: config.router.username,
+      password: Buffer.from(crypto.getRandomValues(new Uint8Array(18))).toString("base64url"),
+      state: "staged",
+      createdAt: now,
+      updatedAt: now,
+      lastSeenAt: null,
+      label: labelWords.join(" "),
+      notes: "",
+    });
+    console.log(`staged ${serial}${labelWords.length ? ` as "${labelWords.join(" ")}"` : ""}`);
   });
 
 program

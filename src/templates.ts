@@ -25,10 +25,10 @@ function rosQuote(value: string): string {
  * reports the public key + serial number to the provisioning server, and
  * imports the tailored provisioning script the server responds with.
  */
-export function renderBootstrap(cfg: Config): string {
+export function renderBootstrap(cfg: Config, tokenOverride?: string): string {
   const url = cfg.server.publicUrl.replace(/\/$/, "");
   const wg = rosQuote(cfg.router.wgInterfaceName);
-  const token = rosQuote(cfg.auth.provisioningToken);
+  const token = rosQuote(tokenOverride ?? cfg.auth.provisioningToken);
   const cert = cfg.router.strictTls ? " check-certificate=yes-without-crl" : "";
   return `# mikrotik-wg-provision bootstrap
 # Paste into a terminal on a factory-fresh RouterOS v7 device, or run:
@@ -69,9 +69,10 @@ export function renderBootstrap(cfg: Config): string {
  * tunnel, management IP, management user, services and a firewall rule that
  * lets the provisioning server reach the router over the tunnel.
  */
-export function renderProvision(cfg: Config, router: RouterRecord): string {
+export function renderProvision(cfg: Config, router: RouterRecord, tokenOverride?: string): string {
   const url = cfg.server.publicUrl.replace(/\/$/, "");
   const wg = rosQuote(cfg.router.wgInterfaceName);
+  const provToken = tokenOverride ?? cfg.auth.provisioningToken;
   const mgmt = parseCidr(cfg.wireguard.mgmtCidr);
   const cert = cfg.router.strictTls ? " check-certificate=yes-without-crl" : "";
   const keepalive =
@@ -116,9 +117,9 @@ export function renderProvision(cfg: Config, router: RouterRecord): string {
     }
 }
 
-${renderHardening(cfg, router)}${renderBackupSchedule(cfg, router)}# 8. Tell the provisioning server the configuration was applied
+${renderHardening(cfg, router)}${renderBackupSchedule(cfg, router, provToken)}# 8. Tell the provisioning server the configuration was applied
 :do {
-    /tool fetch url="${url}/api/confirm" http-method=post http-header-field="Content-Type: application/json" http-data="{\\"token\\":\\"${rosQuote(cfg.auth.provisioningToken)}\\",\\"serialNumber\\":\\"${rosQuote(router.serialNumber)}\\"}" output=none${cert}
+    /tool fetch url="${url}/api/confirm" http-method=post http-header-field="Content-Type: application/json" http-data="{\\"token\\":\\"${rosQuote(provToken)}\\",\\"serialNumber\\":\\"${rosQuote(router.serialNumber)}\\"}" output=none${cert}
 } on-error={
     :log warning "wg-provision: could not confirm with server (tunnel may still be fine)"
 }
@@ -160,7 +161,7 @@ function renderHardening(cfg: Config, router: RouterRecord): string {
   return `# 6. Hardening / base configuration\n${parts.join("\n")}\n\n`;
 }
 
-function renderBackupSchedule(cfg: Config, router: RouterRecord): string {
+function renderBackupSchedule(cfg: Config, router: RouterRecord, provToken: string): string {
   if (!cfg.backup.enabled) return "";
   const url = cfg.server.publicUrl.replace(/\/$/, "");
   const h = cfg.backup.intervalHours;
@@ -168,7 +169,7 @@ function renderBackupSchedule(cfg: Config, router: RouterRecord): string {
   const cert = cfg.router.strictTls ? " check-certificate=yes-without-crl" : "";
   // The script body is a RouterOS string literal inside the .rsc, so quotes
   // inside it are escaped for RouterOS (\\\" in TS source -> \" in the file).
-  const uploadUrl = `${url}/api/backup?token=${encodeURIComponent(cfg.auth.provisioningToken)}&serial=${encodeURIComponent(router.serialNumber)}`;
+  const uploadUrl = `${url}/api/backup?token=${encodeURIComponent(provToken)}&serial=${encodeURIComponent(router.serialNumber)}`;
   const script =
     `/export file=wg-provision-backup; :delay 5s; ` +
     `/tool fetch upload=yes http-method=post url=\\"${rosQuote(uploadUrl)}\\" src-path=wg-provision-backup.rsc output=none${cert}; ` +
@@ -184,8 +185,9 @@ function renderBackupSchedule(cfg: Config, router: RouterRecord): string {
 }
 
 /** One-liner a tech runs on a fresh router to kick everything off. */
-export function renderOneLiner(cfg: Config): string {
+export function renderOneLiner(cfg: Config, tokenOverride?: string): string {
   const url = cfg.server.publicUrl.replace(/\/$/, "");
   const cert = cfg.router.strictTls ? " check-certificate=yes-without-crl" : "";
-  return `/tool fetch url="${url}/bootstrap.rsc?token=${encodeURIComponent(cfg.auth.provisioningToken)}" dst-path=bootstrap.rsc${cert}; :delay 2s; /import bootstrap.rsc`;
+  const token = tokenOverride ?? cfg.auth.provisioningToken;
+  return `/tool fetch url="${url}/bootstrap.rsc?token=${encodeURIComponent(token)}" dst-path=bootstrap.rsc${cert}; :delay 2s; /import bootstrap.rsc`;
 }

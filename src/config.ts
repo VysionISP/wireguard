@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 
+/** Treat "" (common in hand-edited config) as absent. */
+function emptyToUndef<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((v) => (v === "" ? undefined : v), schema.optional());
+}
+
 const configSchema = z.object({
   server: z.object({
     /** Address the provisioning HTTP server binds to. */
@@ -19,6 +24,14 @@ const configSchema = z.object({
     provisioningToken: z.string().min(16),
     /** Secret for admin endpoints (router listing etc). */
     adminToken: z.string().min(16),
+    /**
+     * When false, only one-time tokens issued from the dashboard can register
+     * routers — the shared provisioningToken is refused. Turn this off once
+     * you've switched your workflow to one-time tokens.
+     */
+    allowMasterProvisioningToken: z.boolean().default(true),
+    /** Session lifetime for dashboard logins. */
+    sessionHours: z.number().int().min(1).default(12),
   }),
   wireguard: z.object({
     /** WireGuard interface on THIS host that terminates management tunnels. */
@@ -81,8 +94,32 @@ const configSchema = z.object({
       keep: z.number().int().min(1).default(30),
     })
     .default({}),
+  /** Offline/online/registration notifications. */
+  alerts: z
+    .object({
+      /**
+       * POSTed {text, event, router} as JSON — point it at Slack, Discord,
+       * n8n, anything. Empty string is treated as "not set" so the example
+       * config validates as-is.
+       */
+      webhookUrl: emptyToUndef(z.string().url()).optional(),
+      telegramBotToken: emptyToUndef(z.string()).optional(),
+      telegramChatId: emptyToUndef(z.string()).optional(),
+      notifyOnRegister: z.boolean().default(true),
+      /** Also alert when a router comes back online (not just when it drops). */
+      notifyOnline: z.boolean().default(true),
+      /** Max one offline + one online alert per router per this window (flap guard). */
+      suppressMinutes: z.number().int().min(0).default(15),
+    })
+    .default({}),
   /** Path of the JSON router inventory. */
   storePath: z.string().default("data/routers.json"),
+  /** One-time bootstrap tokens. */
+  tokensPath: z.string().default("data/tokens.json"),
+  /** Dashboard user accounts. */
+  usersPath: z.string().default("data/users.json"),
+  /** Append-only audit log (JSONL). */
+  auditPath: z.string().default("data/audit.jsonl"),
 });
 
 export type Config = z.infer<typeof configSchema>;

@@ -48,7 +48,10 @@ export class RouterStore {
   }
 
   usedTunnelIps(): string[] {
-    return this.list().map((r) => r.tunnelIp);
+    // Staged records have no tunnel IP yet.
+    return this.list()
+      .map((r) => r.tunnelIp)
+      .filter((ip) => ip !== "");
   }
 
   save(record: RouterRecord): void {

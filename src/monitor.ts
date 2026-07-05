@@ -1,5 +1,6 @@
 import type { RouterStore } from "./store.js";
 import type { WireguardManager } from "./wireguard.js";
+import type { Alerter } from "./alerts.js";
 
 const MAX_TRANSITIONS = 30;
 
@@ -18,6 +19,7 @@ export async function monitorTick(
   store: RouterStore,
   wg: WireguardManager,
   offlineAfterSeconds: number,
+  alerter?: Alerter,
 ): Promise<MonitorStats> {
   const handshakes = await wg.latestHandshakes().catch(() => null);
   if (handshakes === null) return { online: 0, offline: 0, changed: 0 };
@@ -26,7 +28,7 @@ export async function monitorTick(
   const stats: MonitorStats = { online: 0, offline: 0, changed: 0 };
 
   for (const router of store.list()) {
-    if (router.state === "revoked") continue;
+    if (router.state === "revoked" || router.state === "staged") continue;
     const age = handshakes[router.publicKey] ?? null;
     const isOnline = age !== null && age < offlineAfterSeconds;
     if (isOnline) stats.online++;
@@ -51,6 +53,9 @@ export async function monitorTick(
       stats.changed++;
       dirty = true;
       console.log(`monitor: ${router.serialNumber} went ${isOnline ? "online" : "offline"}`);
+      alerter?.routerTransition(router, isOnline).catch((err) =>
+        console.error(`alert failed: ${(err as Error).message}`),
+      );
     }
     if (dirty) store.save(router);
   }
@@ -63,9 +68,10 @@ export function startMonitor(
   wg: WireguardManager,
   intervalSeconds: number,
   offlineAfterSeconds: number,
+  alerter?: Alerter,
 ): () => void {
   const timer = setInterval(() => {
-    monitorTick(store, wg, offlineAfterSeconds).catch((err) =>
+    monitorTick(store, wg, offlineAfterSeconds, alerter).catch((err) =>
       console.error(`monitor: ${(err as Error).message}`),
     );
   }, intervalSeconds * 1000);

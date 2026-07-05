@@ -26,6 +26,9 @@ export function testConfig(overrides: Partial<Record<string, unknown>> = {}): Co
     },
     router: { wgInterfaceName: "wg-mgmt", username: "wg-mgmt", strictTls: false },
     storePath: path.join(tempDir(), "routers.json"),
+    tokensPath: path.join(tempDir(), "tokens.json"),
+    usersPath: path.join(tempDir(), "users.json"),
+    auditPath: path.join(tempDir(), "audit.jsonl"),
     ...overrides,
   });
 }

@@ -100,6 +100,67 @@ The dashboard talks to the admin API below; anything it does you can also
 script. If you expose it beyond localhost, put it behind the same HTTPS
 reverse proxy as the provisioning endpoints.
 
+## Users & roles
+
+The dashboard supports named accounts with two roles:
+
+- **tech** — view the fleet, verify routers, see live stats, view/download backups
+- **admin** — everything, plus revoke, bulk commands, tokens, users, restore staging
+
+Create users with `mtprov user add <name> <admin|tech>` (prints a generated
+password) or from the Users tab. The legacy `adminToken` still works as a
+break-glass admin login (username `admin`, token as the password) and for API
+scripting. Sessions last `auth.sessionHours` (default 12) with sliding expiry.
+Every mutating action is written to an append-only audit log
+(`auditPath`, viewable in the Audit tab).
+
+## Alerts
+
+Set any of `alerts.webhookUrl`, `alerts.telegramBotToken` +
+`alerts.telegramChatId` and the monitor sends a notification when a router
+goes offline, comes back (`notifyOnline`), or registers (`notifyOnRegister`).
+`suppressMinutes` (default 15) caps a flapping link to one offline + one
+online alert per window. The webhook receives
+`{text, event, router:{serialNumber,label,tunnelIp}}` — point it at Slack,
+Discord, n8n, or your own endpoint.
+
+## One-time bootstrap tokens
+
+The shared `provisioningToken` lives in every bootstrap script, so a leaked
+script can onboard rogue routers indefinitely. One-time tokens close that:
+generate one per install from the Tokens tab or `mtprov token "note"`, and it
+registers exactly one router before burning. Set
+`auth.allowMasterProvisioningToken: false` to refuse the shared token
+entirely and require one-time tokens for every onboard.
+
+## Pre-staging
+
+Enter a serial and customer label *before* the router ships
+(`mtprov prestage <serial> "label"` or the Fleet tab). When that router phones
+home it's automatically matched by serial and keeps the label, so the fleet is
+never a wall of anonymous serials.
+
+## Live device stats
+
+The Live button on each router opens a real-time snapshot pulled over the
+tunnel via REST: uptime, CPU, memory, interface traffic, and — for LTE/5G
+devices like the Chateau — signal metrics (RSRP/RSRQ/SINR, operator, band).
+Handy for diagnosing "internet is slow" without a truck roll.
+
+## Bulk commands
+
+Admins can run a RouterOS command across the whole fleet (or a selection)
+over SSH from the Bulk actions tab, 5 routers at a time, with per-router
+success/output captured. Presets included for identity, resources, DNS,
+firmware update check, and reboot.
+
+## Backup diff & restore
+
+The details view diffs any two stored config versions (colourised) and, for
+admins, stages a restore: the chosen backup is uploaded to the router as
+`wg-restore.rsc` for you to review and `/import` manually — never auto-applied,
+because replaying a full export onto a live device needs human eyes.
+
 ## Fleet monitoring
 
 The server checks every router's WireGuard handshake in the background
@@ -164,16 +225,29 @@ routers.
 | `GET /bootstrap.rsc?token=…` | provisioning token | The generic bootstrap script |
 | `POST /api/register` | provisioning token (body) | Router phone-home; responds with a tailored `.rsc` |
 | `POST /api/confirm` | provisioning token (body) | Router confirms the config was applied |
+Auth is a **Bearer session token** (from `POST /api/login`) or the legacy
+**admin token**. "tech" endpoints accept either role; "admin" endpoints
+require the admin role.
+
 | `GET /` | none (UI does client-side auth) | Web dashboard |
-| `GET /api/routers` | `Bearer` admin token | Inventory with handshake ages (passwords excluded) |
-| `GET /api/routers/:ref` | `Bearer` admin token | Full details incl. credentials (ref = id, serial or tunnel IP) |
-| `POST /api/routers/:ref/verify` | `Bearer` admin token | Handshake + REST reachability check; marks `verified` |
-| `POST /api/routers/:ref/revoke` | `Bearer` admin token | Remove peer, block re-registration |
-| `GET /api/bootstrap-info` | `Bearer` admin token | The tech-facing bootstrap one-liner |
-| `PATCH /api/routers/:ref` | `Bearer` admin token | Set `label` / `notes` |
+| `POST /api/login` | none | Exchange username/password for a session token |
+| `POST /api/logout` / `GET /api/me` | tech | End session / current identity |
+| `GET /api/routers` | tech | Inventory with handshake ages + online flag |
+| `GET /api/routers/:ref` | tech | Full details incl. credentials (ref = id, serial or tunnel IP) |
+| `POST /api/routers/:ref/verify` | tech | Handshake + REST reachability check; marks `verified` |
+| `GET /api/routers/:ref/live` | tech | Live stats over the tunnel (system, interfaces, LTE) |
+| `PATCH /api/routers/:ref` | tech | Set `label` / `notes` |
+| `GET /api/routers/:ref/backups` / `…/:name` | tech | List / download backup versions |
+| `GET /api/routers/:ref/backups-diff?a&b` | tech | Diff two backup versions |
+| `POST /api/routers/:ref/revoke` | admin | Remove peer, block re-registration |
+| `POST /api/routers/:ref/restore` | admin | Upload a backup to the router as `wg-restore.rsc` |
+| `POST /api/prestage` | admin | Create a staged record by serial |
+| `POST /api/bulk` | admin | Run a command on many routers over SSH |
+| `GET/POST/DELETE /api/tokens` | admin | Manage one-time bootstrap tokens |
+| `GET/POST/DELETE /api/users` | admin | Manage dashboard users |
+| `GET /api/audit` | admin | Recent audit entries |
+| `GET /api/bootstrap-info` | tech | The tech-facing bootstrap one-liner |
 | `POST /api/backup?token&serial` | provisioning token (query) | Router-pushed config backup |
-| `GET /api/routers/:ref/backups` | `Bearer` admin token | List stored backup versions |
-| `GET /api/routers/:ref/backups/:name` | `Bearer` admin token | Download a backup |
 | `GET /healthz` | none | Liveness |
 
 Router lifecycle: `registered → confirmed → verified` (via `verify`), or `revoked`.
