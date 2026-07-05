@@ -464,13 +464,13 @@
     <div class="panel">
       <div class="panelhead">
         <h2>Routers</h2>
-        <input id="search" type="search" placeholder="search label, serial, identity, IP…">
+        <input id="search" type="search" placeholder="search customer, label, serial, IP…">
         <button id="csvBtn" class="gap">Export CSV</button>
       </div>
       <div class="tablewrap">
         <table>
           <thead><tr>
-            <th>Tunnel</th><th>Label</th><th>Serial</th><th>Type</th>
+            <th>Tunnel</th><th>Label</th><th>Customer</th><th>Serial</th><th>Type</th>
             <th>Mgmt IP</th><th>State</th><th>Handshake</th><th>Last seen</th><th></th>
           </tr></thead>
           <tbody id="rows"></tbody>
@@ -1136,7 +1136,7 @@ async function saveMap() {
 /* ---------------- fleet ---------------- */
 function matches(r, q) {
   if (!q) return true;
-  return [r.label, r.serialNumber, r.identity, r.tunnelIp, r.boardName, r.notes]
+  return [r.label, r.customerGroup, r.serialNumber, r.identity, r.tunnelIp, r.boardName, r.notes, r.deviceType]
     .some((f) => (f || "").toLowerCase().includes(q));
 }
 
@@ -1164,6 +1164,7 @@ function render() {
     <tr>
       <td>${staged ? '<span class="chips">—</span>' : `<span class="dot ${online(r) ? "on" : "off"}"></span>${online(r) ? "up" : "down"}`}</td>
       <td>${r.label ? esc(r.label) : '<span style="color:var(--muted)">—</span>'}</td>
+      <td>${r.customerGroup ? esc(r.customerGroup) : '<span style="color:var(--muted)">—</span>'}</td>
       <td class="mono">${esc(r.serialNumber)}</td>
       <td><span class="dtype ${esc(r.deviceType || "customer")}">${r.deviceType === "infrastructure" ? "infra" : "cust"}</span>${r.monitoring && r.monitoring.enabled ? ' <span class="dot on" style="width:6px;height:6px;margin:0 0 0 4px" title="monitored"></span>' : ""}</td>
       <td class="mono">${r.tunnelIp ? esc(r.tunnelIp) : "—"}</td>
@@ -1235,7 +1236,7 @@ async function openDetails(ref) {
     <div class="meta">
       <label for="mLabel">Label (customer / site)</label>
       <input id="mLabel" value="${esc(r.label || "")}" placeholder="e.g. Smith residence — Ballarat">
-      <label for="mGroup">Customer <span class="chips">(devices for a customer share a network map)</span></label>
+      <label for="mGroup">Customer <span class="chips">(groups this device under a customer — for search, the fleet view and the network map)</span></label>
       <input id="mGroup" list="custList" value="${esc(r.customerGroup || "")}" placeholder="pick or type a customer">
       <datalist id="custList"></datalist>
       <label for="mNotes">Notes</label>
