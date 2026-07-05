@@ -22,6 +22,8 @@ export interface DeviceMonitorDeps {
   events: EventLog;
   alerter: Alerter;
   offlineAfterSeconds: number;
+  /** The management account we log in as; its logins are our own polling. */
+  managementUsername: string;
   fetchInterfaces?: FetchIfacesFn;
   fetchLog?: FetchLogFn;
 }
@@ -36,12 +38,20 @@ function watchedInterfaces(mon: DeviceMonitoring, all: string[], auto: Set<strin
   return [...auto];
 }
 
-/** Extract a stable signature + human summary for a login log line. */
-function loginInfo(entry: LogEntry): { key: string; summary: string } | null {
+/**
+ * Extract a login from a log line, or null to ignore it.
+ *
+ * The key is the message text WITHOUT the timestamp so a single human login
+ * (Winbox opens several connections, each logged a second apart) collapses to
+ * one notification instead of several. Logins by the management account are
+ * dropped entirely — those are this server's own REST/API polling.
+ */
+function loginInfo(entry: LogEntry, mgmtUser: string): { key: string; summary: string } | null {
   if (!/logged in/i.test(entry.message)) return null;
-  if (!/account/i.test(entry.topics) && !/logged in/i.test(entry.message)) return null;
-  // Message forms: "user admin logged in from 10.0.0.5 via winbox"
-  return { key: `${entry.time}|${entry.message}`, summary: entry.message };
+  const who = /^user (\S+) logged in/i.exec(entry.message)?.[1];
+  if (who && mgmtUser && who === mgmtUser) return null; // our own polling — never alert
+  const summary = entry.message.trim();
+  return { key: summary, summary };
 }
 
 /**
@@ -120,24 +130,24 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
     if (mon.alertOnLogin) {
       const log = await fetchLog(router.tunnelIp, router.username, router.password);
       const prevSeen = new Set(state.seenLogins);
-      // Every login currently in the router's memory log. This IS the source
-      // of truth: an entry can't reappear once the ring buffer rotates it out,
-      // so we set (not accumulate+truncate) — which fixes false re-alerts when
-      // the log holds more login lines than the old cap.
-      const current: { key: string; summary: string }[] = [];
+      // Distinct logins currently in the router's memory log, de-duplicated by
+      // message so one human login (several Winbox connections) is one alert,
+      // and excluding this server's own management-account API polls.
+      const currentMap = new Map<string, string>();
       for (const entry of log) {
-        const info = loginInfo(entry);
-        if (info) current.push(info);
+        const info = loginInfo(entry, deps.managementUsername);
+        if (info && !currentMap.has(info.key)) currentMap.set(info.key, info.summary);
       }
       if (state.initialised) {
-        for (const c of current) {
-          if (prevSeen.has(c.key)) continue;
-          events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "login", severity: "info", message: c.summary });
-          alerter.custom(router, `🔑 ${labelOf(router)}: ${c.summary}`, "login").catch(() => {});
+        for (const [key, summary] of currentMap) {
+          if (prevSeen.has(key)) continue;
+          events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "login", severity: "info", message: summary });
+          // suppressKey collapses repeats across ticks/restarts within the window.
+          alerter.custom(router, `🔑 ${labelOf(router)}: ${summary}`, "login", `login:${router.serialNumber}:${key}`).catch(() => {});
         }
       }
-      // Keep a generous bound; RouterOS memory logs are far smaller than this.
-      state.seenLogins = current.map((c) => c.key).slice(-MAX_SEEN_LOGINS);
+      // The log IS the source of truth; set rather than accumulate+truncate.
+      state.seenLogins = [...currentMap.keys()].slice(-MAX_SEEN_LOGINS);
       dirty = true;
     }
 

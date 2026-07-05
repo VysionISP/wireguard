@@ -83,6 +83,7 @@ describe("deviceMonitorTick", () => {
     ];
     const deps = {
       store, wg: wgFresh([fakeKey(1)]), issues, events, alerter, offlineAfterSeconds: 180,
+      managementUsername: "wg-mgmt",
       fetchInterfaces: async () => ifaces,
       fetchLog: async () => log,
     };
@@ -119,6 +120,41 @@ describe("deviceMonitorTick", () => {
     expect(events.forSerial("INFRA1").some((e) => e.type === "link-up")).toBe(true);
   });
 
+  it("collapses duplicate logins and ignores the management account's own polls", async () => {
+    const store = new RouterStore(path.join(tempDir(), "routers.json"));
+    store.save(router("INFRA2", 3));
+    const issues = new IssueStore(path.join(tempDir(), "issues.json"));
+    const events = new EventLog(path.join(tempDir(), "events.jsonl"));
+    const alerts: string[] = [];
+    const alerter = new Alerter({ webhookUrl: "https://h.test", notifyOnRegister: true, notifyOnline: true, suppressMinutes: 0 } as any, async (t) => { alerts.push(t); });
+    let log: LogEntry[] = [];
+    const deps = {
+      store, wg: wgFresh([fakeKey(3)]), issues, events, alerter, offlineAfterSeconds: 180,
+      managementUsername: "wg-mgmt",
+      fetchInterfaces: async () => [],
+      fetchLog: async () => log,
+    };
+    await deviceMonitorTick(deps); // baseline (empty)
+
+    // One human login written as 3 near-identical Winbox lines + our own API polls.
+    log = [
+      { id: "*1", time: "10:00:01", topics: "system,info,account", message: "user admin logged in from 1.2.3.4 via winbox" },
+      { id: "*2", time: "10:00:02", topics: "system,info,account", message: "user admin logged in from 1.2.3.4 via winbox" },
+      { id: "*3", time: "10:00:03", topics: "system,info,account", message: "user admin logged in from 1.2.3.4 via winbox" },
+      { id: "*4", time: "10:00:04", topics: "system,info,account", message: "user wg-mgmt logged in from 10.99.0.1 via rest-api" },
+      { id: "*5", time: "10:00:05", topics: "system,info,account", message: "user wg-mgmt logged in via api" },
+    ];
+    await deviceMonitorTick(deps);
+    const loginAlerts = alerts.filter((a) => /logged in/.test(a));
+    expect(loginAlerts).toHaveLength(1);                          // 3 winbox lines → 1
+    expect(loginAlerts[0]).toContain("admin");
+    expect(alerts.some((a) => /wg-mgmt/.test(a))).toBe(false);    // our own polls suppressed
+
+    // Next tick, same log → no repeat.
+    await deviceMonitorTick(deps);
+    expect(alerts.filter((a) => /logged in/.test(a))).toHaveLength(1);
+  });
+
   it("skips routers without monitoring, offline routers, and staged/revoked", async () => {
     const store = new RouterStore(path.join(tempDir(), "routers.json"));
     store.save(router("NOTMON", 1, false));
@@ -128,7 +164,7 @@ describe("deviceMonitorTick", () => {
     const alerter = new Alerter({ suppressMinutes: 0 } as any, async () => {});
     let polled = 0;
     const res = await deviceMonitorTick({
-      store, issues, events, alerter, offlineAfterSeconds: 180,
+      store, issues, events, alerter, offlineAfterSeconds: 180, managementUsername: "wg-mgmt",
       // only NOTMON's key is fresh; OFFL has no handshake
       wg: wgFresh([fakeKey(1)]),
       fetchInterfaces: async () => { polled++; return []; },

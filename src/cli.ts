@@ -50,7 +50,7 @@ program
     startMonitor(store, wg, config.monitor.intervalSeconds, config.monitor.offlineAfterSeconds, alerter, { issues, events });
     if (config.deviceMonitor.enabled) {
       startDeviceMonitor(
-        { store, wg, issues, events, alerter, offlineAfterSeconds: config.monitor.offlineAfterSeconds },
+        { store, wg, issues, events, alerter, offlineAfterSeconds: config.monitor.offlineAfterSeconds, managementUsername: config.router.username },
         config.deviceMonitor.intervalSeconds,
       );
       console.log(`device monitor: every ${config.deviceMonitor.intervalSeconds}s (logins + link state)`);
