@@ -956,16 +956,46 @@ async function loadGroup(name) {
 async function addDeviceToCustomer(customerName) {
   const target = customerName || mapState.group;
   if (!target) return toast("Select a customer first");
-  const all = await api("/api/routers");
-  const avail = all.filter((r) => (r.customerGroup || "") !== target && r.state !== "revoked" && r.state !== "staged");
-  if (!avail.length) return toast("No available devices to add");
   $("mTitle").textContent = "Add device to " + target;
-  $("mBody").innerHTML = `<div class="backlist">${avail.map((r) => `
-    <div class="brow">
-      <button class="linkish" data-adddev="${esc(r.id)}" data-addto="${esc(target)}">${esc(r.label || r.identity || r.serialNumber)}</button>
-      <span class="chips">${esc(r.serialNumber)} · ${r.customerGroup ? "in " + esc(r.customerGroup) : "unassigned"}</span>
-    </div>`).join("")}</div>`;
+  $("mBody").innerHTML = `
+    <p class="chips">Generate a one-time bootstrap link for a <b>new</b> MikroTik. Paste it into the router's terminal — it joins <b>${esc(target)}</b> automatically, then the token burns.</p>
+    <div class="meta">
+      <label>Device label (optional)</label>
+      <input id="addLabel" placeholder="e.g. Main router">
+      <button class="primary" id="addGenBtn" data-gencust="${esc(target)}">Generate bootstrap link</button>
+    </div>
+    <div id="addGenOut"></div>
+    <div class="sub">Or attach an existing device</div>
+    <div id="addExisting"><span class="chips">loading…</span></div>`;
   $("modal").showModal();
+  $("addGenBtn").addEventListener("click", () => generateCustomerLink(target).catch((e) => toast(e.message)));
+  // existing-device list
+  try {
+    const all = await api("/api/routers");
+    const avail = all.filter((r) => (r.customerGroup || "") !== target && r.state !== "revoked" && r.state !== "staged");
+    $("addExisting").innerHTML = avail.length
+      ? `<div class="backlist">${avail.map((r) => `
+        <div class="brow">
+          <button class="linkish" data-adddev="${esc(r.id)}" data-addto="${esc(target)}">${esc(r.label || r.identity || r.serialNumber)}</button>
+          <span class="chips">${esc(r.serialNumber)} · ${r.customerGroup ? "in " + esc(r.customerGroup) : "unassigned"}</span>
+        </div>`).join("")}</div>`
+      : '<span class="chips">No already-registered devices to move here.</span>';
+  } catch { $("addExisting").innerHTML = '<span class="chips">could not load devices</span>'; }
+}
+async function generateCustomerLink(customer) {
+  const label = $("addLabel")?.value.trim() || "";
+  const btn = $("addGenBtn");
+  btn.disabled = true; btn.textContent = "Generating…";
+  try {
+    const t = await api("/api/tokens", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: "device for " + customer, customer, label, ttlHours: 168 }),
+    });
+    $("addGenOut").innerHTML = `
+      <div class="boot" style="padding:0;margin-top:6px"><code class="mono">${esc(t.oneLiner)}</code>
+      <button data-copy="${esc(t.oneLiner)}">Copy</button></div>
+      <p class="chips" style="margin-top:8px">Paste into the MikroTik terminal. Valid 7 days · one use · joins <b>${esc(customer)}</b>.</p>`;
+  } finally { btn.disabled = false; btn.textContent = "Generate another link"; }
 }
 // Give any un-positioned node a spot on a grid so nothing overlaps at 0,0.
 function autoLayout(routers, saved) {

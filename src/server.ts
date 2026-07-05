@@ -238,7 +238,9 @@ export function buildApp(deps: AppDeps): Express {
           lastSeenAt: now,
           deviceType: "customer",
           customerGroup: otToken?.customer || undefined,
-          label: otToken?.label || undefined,
+          // Prefer the token's label; else use the router's own identity as the
+          // label, unless it's still the factory default "MikroTik".
+          label: otToken?.label || (body.identity && body.identity !== "MikroTik" ? body.identity : undefined),
           monitoring: config.deviceMonitor.enableNewByDefault
             ? defaultMonitoring("customer", config.deviceMonitor.defaultAlertOnLogin, config.deviceMonitor.defaultAlertOnLinkDown)
             : undefined,

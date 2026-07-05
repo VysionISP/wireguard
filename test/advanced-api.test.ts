@@ -126,6 +126,15 @@ describe("one-time tokens", () => {
     expect(res.status).toBe(400);
   });
 
+  it("uses the router identity as the label when it isn't the default MikroTik", async () => {
+    // default identity → no label
+    await register("IDN-DEF", 31);
+    expect(store.findBySerial("IDN-DEF")!.label).toBeUndefined();
+    // custom identity → becomes the label
+    await request(app).post("/api/register").send({ token: cfg.auth.provisioningToken, publicKey: fakeKey(32), serialNumber: "IDN-SET", identity: "Reception-AP" });
+    expect(store.findBySerial("IDN-SET")!.label).toBe("Reception-AP");
+  });
+
   it("a token carrying a customer + label assigns them on bootstrap", async () => {
     const t = await req("post", "/api/tokens").send({ note: "Smith install", customer: "Smith — Ballarat", label: "Main router" });
     const reg = await register("SMITH-RB1", 11, t.body.token);
