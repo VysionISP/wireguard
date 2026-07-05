@@ -19,6 +19,7 @@ import { IssueStore } from "./issues.js";
 import { EventLog } from "./events.js";
 import { SettingsStore, ROUTE_KEYS, type RouteChat } from "./settings.js";
 import { telegram as realTelegram, type TelegramClient } from "./telegram.js";
+import { interfaceRates, type Sample } from "./stream.js";
 import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, type FetchLiveFn, type FetchIfacesFn } from "./routeros.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
 import { defaultMonitoring, type RouterRecord, type DeviceType } from "./types.js";
@@ -277,18 +278,22 @@ export function buildApp(deps: AppDeps): Express {
 
   // ------------------------------------------------------- admin API + UI
 
+  // Resolve a bearer/query token to a user (session or legacy admin token).
+  function userFromToken(raw: string): { username: string; role: Role } | null {
+    if (!raw) return null;
+    const sess = sessions.get(raw);
+    if (sess) return { username: sess.username, role: sess.role };
+    if (tokenEquals(raw, config.auth.adminToken)) return { username: "admin-token", role: "admin" };
+    return null;
+  }
+
   // Auth: a dashboard session token (user accounts) or the legacy admin
   // token (break-glass / API scripting, always role admin).
   const requireRole =
     (min: Role) =>
     (req: Request, res: Response, next: NextFunction): void => {
       const raw = (req.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
-      let user: { username: string; role: Role } | null = null;
-      const sess = raw ? sessions.get(raw) : null;
-      if (sess) user = { username: sess.username, role: sess.role };
-      else if (raw && tokenEquals(raw, config.auth.adminToken)) {
-        user = { username: "admin-token", role: "admin" };
-      }
+      const user = userFromToken(raw);
       if (!user) {
         res.status(401).json({ error: "unauthorized" });
         return;
@@ -853,6 +858,94 @@ export function buildApp(deps: AppDeps): Express {
     } catch (err) {
       res.status(502).json({ error: `router unreachable: ${(err as Error).message}` });
     }
+  });
+
+  // ---- live streaming (Server-Sent Events) -----------------------------
+  // EventSource can't set headers, so these authenticate via ?token=.
+  function openSse(res: Response): void {
+    res.set({
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      "x-accel-buffering": "no", // don't let a proxy buffer the stream
+    });
+    res.flushHeaders?.();
+    res.write(": connected\n\n");
+  }
+  const sseData = (res: Response, obj: unknown) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+  // Fleet heartbeat: handshake age + online for every router, shared across
+  // all connected dashboards by a single ticker.
+  const fleetClients = new Set<Response>();
+  let fleetTimer: ReturnType<typeof setInterval> | null = null;
+  async function fleetTick(): Promise<void> {
+    if (fleetClients.size === 0) return;
+    const hs = await wg.latestHandshakes().catch(() => ({}) as Record<string, number | null>);
+    const routers = store
+      .list()
+      .filter((r) => r.state !== "staged" && r.state !== "revoked")
+      .map((r) => {
+        const handshakeAge = hs[r.publicKey] ?? null;
+        return {
+          id: r.id,
+          handshakeAge,
+          online: handshakeAge !== null && handshakeAge < config.monitor.offlineAfterSeconds,
+        };
+      });
+    const frame = `data: ${JSON.stringify({ type: "heartbeat", routers })}\n\n`;
+    for (const c of fleetClients) c.write(frame);
+  }
+  app.get("/api/stream", (req: Request, res: Response) => {
+    if (!userFromToken(String(req.query.token ?? ""))) {
+      res.status(401).end();
+      return;
+    }
+    openSse(res);
+    fleetClients.add(res);
+    if (!fleetTimer) {
+      fleetTimer = setInterval(() => void fleetTick(), 3000);
+      fleetTimer.unref?.();
+    }
+    void fleetTick();
+    req.on("close", () => fleetClients.delete(res));
+  });
+
+  // Per-device deep stats: CPU/mem, interface throughput (bits/sec) and LTE,
+  // pushed every ~2s while a client is watching this router.
+  app.get("/api/routers/:ref/stream", (req: Request, res: Response) => {
+    if (!userFromToken(String(req.query.token ?? ""))) {
+      res.status(401).end();
+      return;
+    }
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).end();
+      return;
+    }
+    if (router.state === "staged" || router.state === "revoked") {
+      res.status(400).end();
+      return;
+    }
+    openSse(res);
+    let prev: Sample | null = null;
+    let busy = false;
+    const tick = async (): Promise<void> => {
+      if (busy) return;
+      busy = true;
+      try {
+        const live = await fetchLive(router.tunnelIp, router.username, router.password, 6000);
+        const curr: Sample = { at: Date.now(), interfaces: live.interfaces };
+        sseData(res, { type: "stats", resource: live.resource, interfaces: interfaceRates(prev, curr), lte: live.lte });
+        prev = curr;
+      } catch (err) {
+        sseData(res, { type: "error", error: (err as Error).message });
+      } finally {
+        busy = false;
+      }
+    };
+    const timer = setInterval(() => void tick(), 2000);
+    void tick();
+    req.on("close", () => clearInterval(timer));
   });
 
   // ---- port map: the router's interfaces for the faceplate diagram

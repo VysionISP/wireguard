@@ -219,6 +219,24 @@ Per-device monitoring is fully configurable in the details view (admin):
 device type, master on/off, alert-on-login, alert-on-link-down, and which
 ports to watch (blank = auto: ethernet/SFP/LTE ports up at first poll).
 
+## Live data (streaming)
+
+The dashboard streams live data over Server-Sent Events, so it updates without
+you refreshing:
+
+- **Fleet heartbeat** (`GET /api/stream`) — WireGuard handshake age and
+  online/offline for every router, pushed every ~3 s to all open dashboards
+  from a single shared ticker. The fleet table's up/down dots and handshake
+  column tick in near-real-time and the header shows "live".
+- **Per-device stats** (`GET /api/routers/:ref/stream`) — while the Live view
+  is open, that router's CPU, memory, per-interface **throughput in bits/sec**
+  (computed from byte-counter deltas), and LTE/5G signal stream every ~2 s.
+
+Both authenticate via `?token=` (EventSource can't send headers) and reconnect
+automatically. If you put the server behind a reverse proxy, make sure it does
+not buffer `text/event-stream` — caddy flushes it automatically; for nginx set
+`proxy_buffering off` on these routes.
+
 ## Fleet monitoring
 
 The server checks every router's WireGuard handshake in the background
@@ -309,6 +327,8 @@ require the admin role.
 | `GET /api/audit` | admin | Recent audit entries |
 | `GET/POST /api/settings/telegram*` | admin | Telegram token, verify/fetch chats, routing, test |
 | `GET /api/routers/:ref/interfaces` | tech | Router ports for the faceplate diagram |
+| `GET /api/stream` | token in query | SSE: live fleet handshake/online heartbeat |
+| `GET /api/routers/:ref/stream` | token in query | SSE: live per-device CPU/mem/traffic/LTE |
 | `GET /api/issues` | tech | Active issues + counts (status board) |
 | `POST /api/issues/:id/ack` / `…/resolve` | tech | Acknowledge / clear an issue |
 | `GET /api/events` / `/api/routers/:ref/events` | tech | Global / per-device event feed |

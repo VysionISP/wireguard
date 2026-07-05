@@ -1029,22 +1029,24 @@ async function stageRestore(ref) {
   $("modal").showModal();
 }
 
-/* ---------------- live stats ---------------- */
+/* ---------------- live stats (streamed via SSE) ---------------- */
 function signalTile(k, v, pct) {
   return `<div class="s"><div class="v">${esc(v)}</div><div class="k">${esc(k)}</div>${
     pct != null ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></div>` : ""}</div>`;
 }
-async function openLive(ref) {
-  $("mTitle").textContent = "Live stats";
-  $("mBody").innerHTML = '<p class="chips">Querying the router over the tunnel…</p>';
-  $("modal").showModal();
-  let s;
-  try { s = await api("/api/routers/" + encodeURIComponent(ref) + "/live"); }
-  catch (e) { $("mBody").innerHTML = `<p class="chips">${esc(e.message)}</p>`; return; }
+function fmtBps(bps) {
+  if (!bps || bps < 1) return "0";
+  const u = ["bps", "Kbps", "Mbps", "Gbps"];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(bps) / Math.log(1000)));
+  return (bps / 1000 ** i).toFixed(i ? 1 : 0) + " " + u[i];
+}
+let liveES = null;
+function stopLiveStream() { if (liveES) { liveES.close(); liveES = null; } }
+function renderLive(s) {
   const memUsed = s.resource.totalMemory - s.resource.freeMemory;
   const memPct = s.resource.totalMemory ? (memUsed / s.resource.totalMemory) * 100 : 0;
   let lteHtml = "";
-  for (const l of s.lte) {
+  for (const l of s.lte || []) {
     const rsrp = Number(l.rsrp), rsrq = Number(l.rsrq), sinr = Number(l.sinr);
     lteHtml += `<div class="sub">LTE / 5G — ${esc(l.interface || "")}</div><div class="signal">
       ${l.rsrp != null ? signalTile("RSRP", l.rsrp + " dBm", ((rsrp + 120) / 76) * 100) : ""}
@@ -1056,7 +1058,7 @@ async function openLive(ref) {
       ${l.band ? signalTile("Band", l.band) : ""}
     </div>`;
   }
-  const ifaces = s.interfaces.filter((i) => i.type !== "wg" || i.running).slice(0, 14);
+  const ifaces = (s.interfaces || []).filter((i) => i.type !== "wg" || i.running).slice(0, 16);
   $("mBody").innerHTML = `
     <div class="signal">
       ${signalTile("Uptime", s.resource.uptime)}
@@ -1065,12 +1067,28 @@ async function openLive(ref) {
       ${signalTile("ROS", s.resource.version)}
     </div>
     ${lteHtml}
-    <div class="sub">Interfaces</div>
-    <div class="tablewrap"><table><thead><tr><th>Name</th><th>Type</th><th>State</th><th>RX</th><th>TX</th></tr></thead>
+    <div class="sub">Interfaces — live throughput</div>
+    <div class="tablewrap"><table><thead><tr><th>Name</th><th>Type</th><th>State</th><th>↓ RX</th><th>↑ TX</th><th>Total RX</th><th>Total TX</th></tr></thead>
       <tbody>${ifaces.map((i) => `<tr>
         <td class="mono">${esc(i.name)}</td><td>${esc(i.type)}</td>
         <td><span class="dot ${i.running ? "on" : "off"}"></span>${i.running ? "up" : "down"}</td>
-        <td>${fmtBytes(i.rxByte)}</td><td>${fmtBytes(i.txByte)}</td></tr>`).join("")}</tbody></table></div>`;
+        <td class="mono" style="color:var(--green)">${fmtBps(i.rxBps)}</td>
+        <td class="mono" style="color:var(--accent)">${fmtBps(i.txBps)}</td>
+        <td>${fmtBytes(i.rxByte)}</td><td>${fmtBytes(i.txByte)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="chips" style="margin-top:8px"><span class="dot on"></span>live — streaming every 2s</div>`;
+}
+function openLive(ref) {
+  $("mTitle").textContent = "Live stats";
+  $("mBody").innerHTML = '<p class="chips">Connecting to the router over the tunnel…</p>';
+  $("modal").showModal();
+  stopLiveStream();
+  liveES = new EventSource("/api/routers/" + encodeURIComponent(ref) + "/stream?token=" + encodeURIComponent(token));
+  liveES.onmessage = (ev) => {
+    let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === "stats") renderLive(msg);
+    else if (msg.type === "error") $("mBody").innerHTML = `<p class="chips">router unreachable: ${esc(msg.error)}</p>`;
+  };
+  liveES.onerror = () => { /* auto-reconnects; leave last frame up */ };
 }
 
 /* ---------------- bulk ---------------- */
@@ -1380,14 +1398,39 @@ async function start() {
   showTab("status");
   try { await load(); } catch (e) { if (e.message !== "unauthorized") toast(e.message); }
   clearInterval(timer);
-  // Auto-refresh whichever live tab is showing.
+  // Slower full refresh as a fallback; the live stream does the fast updates.
   timer = setInterval(() => {
     if (document.hidden) return;
     const t = curTab();
     if (t === "status") loadStatus().catch(() => {});
     else if (t === "fleet") load().catch(() => {});
     else if (t === "events") loadEvents().catch(() => {});
-  }, 15000);
+  }, 30000);
+  startFleetStream();
+}
+
+/* ---------------- live fleet heartbeat (SSE) ---------------- */
+let fleetES = null;
+function startFleetStream() {
+  if (fleetES) fleetES.close();
+  fleetES = new EventSource("/api/stream?token=" + encodeURIComponent(token));
+  fleetES.onmessage = (ev) => {
+    let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type !== "heartbeat") return;
+    const byId = new Map(msg.routers.map((r) => [r.id, r]));
+    let changed = false;
+    for (const r of allRouters) {
+      const h = byId.get(r.id);
+      if (h) { r.handshakeAge = h.handshakeAge; r.online = h.online; changed = true; }
+    }
+    if (changed && curTab() === "fleet") render();
+    markLive();
+  };
+  fleetES.onerror = () => { /* EventSource auto-reconnects */ };
+}
+function markLive() {
+  const el = $("refreshed");
+  if (el) el.textContent = "live · " + new Date().toLocaleTimeString();
 }
 
 $("loginBtn").addEventListener("click", doLogin);
@@ -1395,10 +1438,12 @@ $("pInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(
 $("uInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("pInput").focus(); });
 $("logoutBtn").addEventListener("click", async () => {
   await api("/api/logout", { method: "POST" }).catch(() => {});
+  if (fleetES) { fleetES.close(); fleetES = null; }
   localStorage.removeItem("mtprov.token"); token = ""; showLogin();
 });
 $("reloadBtn").addEventListener("click", () => load().catch((e) => toast(e.message)));
 $("acctBtn").addEventListener("click", openAccount);
+$("modal").addEventListener("close", stopLiveStream); // stop live stream when modal closes
 $("search").addEventListener("input", render);
 $("issuesReload").addEventListener("click", () => loadStatus().catch((e) => toast(e.message)));
 $("eventsReload").addEventListener("click", () => loadEvents().catch((e) => toast(e.message)));
