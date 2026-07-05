@@ -147,6 +147,19 @@ describe("one-time tokens", () => {
     expect(list.body[0].customer).toBe("Smith — Ballarat");
   });
 
+  it("a used one-time token can still fetch bootstrap.rsc (re-run/reflash)", async () => {
+    const t = await req("post", "/api/tokens").send({ note: "x" });
+    const tok = t.body.token;
+    await register("REFL-1", 41, tok); // burns the token
+    // Re-fetching the bootstrap script with the now-used token still works...
+    const boot = await request(app).get(`/bootstrap.rsc?token=${encodeURIComponent(tok)}`);
+    expect(boot.status).toBe(200);
+    // ...and re-registering the SAME serial with it succeeds (reflash path).
+    expect((await register("REFL-1", 42, tok)).status).toBe(200);
+    // but a DIFFERENT device with the used token is still rejected at register.
+    expect((await register("REFL-OTHER", 43, tok)).status).toBe(401);
+  });
+
   it("disabling the master token blocks it but one-time still works", async () => {
     cfg.auth.allowMasterProvisioningToken = false;
     app = build();

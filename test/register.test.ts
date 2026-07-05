@@ -117,6 +117,12 @@ describe("GET /bootstrap.rsc", () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain("/interface/wireguard/add");
   });
+
+  it("sets WWW-Authenticate on a 401 (RouterOS fetch compatibility)", async () => {
+    const res = await request(app).get("/bootstrap.rsc?token=nope");
+    expect(res.status).toBe(401);
+    expect(res.headers["www-authenticate"]).toBeTruthy();
+  });
 });
 
 describe("GET /api/routers", () => {

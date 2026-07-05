@@ -148,12 +148,24 @@ export function buildApp(deps: AppDeps): Express {
   });
 
   // The bootstrap script a tech fetches onto a fresh router. Accepts the
-  // master token or an unused one-time token; the script embeds whichever
-  // was presented so /api/register sees the same one.
+  // master token, or any one-time token that exists and hasn't expired —
+  // INCLUDING a used one, so re-running the one-liner (or reflashing the same
+  // device) works. The one-time + serial binding is still enforced at
+  // /api/register, so serving the script here is harmless.
   app.get("/bootstrap.rsc", (req: Request, res: Response) => {
     const token = String(req.query.token ?? "");
-    if (!provisioningAuth(token, null)) {
-      res.status(401).type("text/plain").send(":log error \"wg-provision: invalid token\"\n");
+    const master =
+      config.auth.allowMasterProvisioningToken && tokenEquals(token, config.auth.provisioningToken);
+    const ot = master ? null : tokens.find(token);
+    const otOk = Boolean(ot && !(ot.expiresAt && Date.parse(ot.expiresAt) < Date.now()));
+    if (!master && !otOk) {
+      // RouterOS /tool fetch requires a WWW-Authenticate header on a 401 or it
+      // reports the unhelpful "401 should contain www-authenticate header".
+      res
+        .status(401)
+        .set("WWW-Authenticate", 'Bearer realm="korvix"')
+        .type("text/plain")
+        .send(':log error "wg-provision: invalid or expired bootstrap token"\n');
       return;
     }
     res.type("text/plain").send(renderBootstrap(config, token));
@@ -171,7 +183,7 @@ export function buildApp(deps: AppDeps): Express {
     await withRegisterLock(async () => {
     const tokenKind = provisioningAuth(body.token, body.serialNumber);
     if (!tokenKind) {
-      res.status(401).json({ error: "invalid provisioning token" });
+      res.status(401).set("WWW-Authenticate", 'Bearer realm="korvix"').json({ error: "invalid provisioning token" });
       return;
     }
     // A one-time token may carry a customer + label to apply at onboarding.
