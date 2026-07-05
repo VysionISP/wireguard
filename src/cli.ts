@@ -6,6 +6,7 @@ import { buildApp } from "./server.js";
 import { DryRunManager, WgCommandManager, type WireguardManager } from "./wireguard.js";
 import { renderBootstrap, renderOneLiner } from "./templates.js";
 import { fetchRouterInfo } from "./routeros.js";
+import { syncPeers } from "./sync.js";
 
 function makeWg(config: Config): WireguardManager {
   return config.wireguard.applyMode === "wg"
@@ -27,8 +28,12 @@ program
 program
   .command("serve")
   .description("run the provisioning server")
-  .action(() => {
+  .action(async () => {
     const { config, store, wg } = open(program.opts().config);
+    // Peers added with `wg set` don't survive an interface/host restart, so
+    // re-apply the whole inventory before accepting traffic.
+    const { applied, failed } = await syncPeers(store, wg);
+    if (applied || failed) console.log(`peer sync: ${applied} applied, ${failed} failed`);
     const app = buildApp({ config, store, wg });
     app.listen(config.server.port, config.server.host, () => {
       console.log(
@@ -118,6 +123,16 @@ program
       console.error(`reachable: no — ${(err as Error).message}`);
       process.exitCode = 1;
     }
+  });
+
+program
+  .command("sync")
+  .description("re-apply all non-revoked peers to the WireGuard interface (after restarts)")
+  .action(async () => {
+    const { store, wg } = open(program.opts().config);
+    const { applied, failed } = await syncPeers(store, wg);
+    console.log(`peer sync: ${applied} applied, ${failed} failed`);
+    if (failed > 0) process.exitCode = 1;
   });
 
 program

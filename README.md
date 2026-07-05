@@ -144,6 +144,39 @@ its new public key replaces the old peer. Revoked serials cannot re-register.
 - Credentials live in `data/routers.json` on the server host — restrict file
   permissions and back it up encrypted.
 
+## Deploying on Windows
+
+`deploy/windows/deploy.ps1` sets up everything on a Windows host (Windows
+10/11 or Server 2019+) in one shot. From an elevated PowerShell prompt in the
+repo:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows\deploy.ps1 `
+    -PublicUrl "https://provision.example.com" `
+    -EndpointHost "provision.example.com"
+```
+
+It installs Node.js LTS and WireGuard (via winget) if missing, builds the
+project, generates the server WireGuard keypair, installs the management
+tunnel as a Windows service, writes `config.json` with random tokens (an
+existing one is kept), opens firewall ports, registers the provisioning
+server as a boot-time Scheduled Task (SYSTEM, auto-restart, logs to
+`logs\server.log`), health-checks it, and prints the bootstrap one-liner.
+
+Optional parameters: `-HttpPort` (8442), `-WgPort` (51820), `-MgmtCidr`
+(`10.99.0.0/16`), `-ServerTunnelIp` (`10.99.0.1`), `-TunnelName`
+(`wg-mgmt-server`). Remove everything (keeping config and inventory) with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows\deploy.ps1 -Uninstall
+```
+
+On startup (and via `node dist/cli.js sync`) the server re-applies every
+non-revoked peer to the interface, so the fleet reconnects after reboots.
+
+As on Linux, terminate TLS in front of the HTTP port (IIS ARR, nginx, caddy,
+or a cloud load balancer) so `PublicUrl` serves HTTPS.
+
 ## Development
 
 ```bash
