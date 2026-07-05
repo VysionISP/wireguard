@@ -219,6 +219,10 @@
   .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--green)); box-shadow: 0 0 6px -1px var(--green); }
   pre.diff { background: #05080b; border: 1px solid var(--border2); border-radius: 3px; padding: 12px; overflow-x: auto; font-size: 12px; line-height: 1.5; font-family: var(--mono); }
   pre.diff .add { color: var(--green); } pre.diff .del { color: var(--red); } pre.diff .hd { color: var(--accent); }
+  pre.rsc { background: #05080b; border: 1px solid var(--border2); border-radius: 3px; padding: 12px; overflow: auto; font-size: 12px; line-height: 1.5; font-family: var(--mono); max-height: 62vh; color: var(--text); white-space: pre; }
+  .brow { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+  button.linkish { background: none; border: none; color: var(--accent); padding: 2px 0; font-size: 12.5px; text-transform: none; letter-spacing: 0; cursor: pointer; }
+  button.linkish:hover { text-decoration: underline; color: #fff; }
   pre.out { background: #05080b; border: 1px solid var(--border2); border-radius: 3px; padding: 8px 10px; margin: 2px 0 0; font-size: 12px; white-space: pre-wrap; max-height: 160px; overflow-y: auto; font-family: var(--mono); }
 
   /* ---- login ---- */
@@ -785,17 +789,22 @@ async function openDetails(ref) {
     </div>` : ""}
     <div class="sub" style="display:flex;align-items:center;gap:10px">Config backups
       ${r.tunnelIp ? `<button data-act="backupnow" data-ref="${esc(r.id)}" style="text-transform:none;letter-spacing:0">Back up now</button>` : ""}</div>
-    <div class="backlist" id="backlist">${backups.length ? backups.map((b) => `
-      <div><a data-dl="${esc(b.name)}" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">${esc(b.name)}</a>
-      <span style="color:var(--muted)">${(b.size / 1024).toFixed(1)} KB</span></div>`).join("")
+    <div class="backlist" id="backlist">${backups.length ? backups.map((b, i) => `
+      <div class="brow">
+        <button data-view="${esc(b.name)}" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" data-prev="${esc(backups[i + 1]?.name || "")}" class="linkish">${esc(b.name)}</button>
+        <span class="chips">${(b.size / 1024).toFixed(1)} KB${i === 0 ? " · latest" : ""}</span>
+        <span style="flex:1"></span>
+        ${backups[i + 1] ? `<button data-diffab="${esc(backups[i + 1].name)}|${esc(b.name)}" data-ref="${esc(r.id)}" class="linkish">diff vs prev</button>` : ""}
+        <button data-dl="${esc(b.name)}" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" class="linkish">download</button>
+      </div>`).join("")
       : '<div style="color:var(--muted)">none yet — the router pushes its config on schedule after provisioning</div>'}
     </div>
-    ${backups.length >= 2 ? `<div class="sub">Compare versions</div>
+    ${backups.length >= 2 ? `<div class="sub">Compare any two versions</div>
       <div class="row2">
         <select id="diffA">${backOpts}</select>
         <span class="chips">vs</span>
         <select id="diffB">${backOpts}</select>
-        <button data-act="diff" data-ref="${esc(r.id)}">Diff</button>
+        <button data-act="diff" data-ref="${esc(r.id)}">Compare</button>
         ${isAdmin() ? `<button data-act="restore" data-ref="${esc(r.id)}" class="danger">Stage restore…</button>` : ""}
       </div>` : ""}`;
   if (backups.length >= 2) { $("diffB").selectedIndex = 1; }
@@ -848,14 +857,32 @@ function renderDiff(patch) {
   }).join("\n");
 }
 
-async function showDiff(ref) {
-  const a = $("diffA").value, b = $("diffB").value;
+async function showDiffBetween(ref, a, b) {
+  if (!a || !b) return toast("Pick two versions");
   if (a === b) return toast("Pick two different versions");
   const patch = await api(`/api/routers/${encodeURIComponent(ref)}/backups-diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
-  $("mTitle").textContent = "Diff";
-  $("mBody").innerHTML = patch.trim()
-    ? `<pre class="diff">${renderDiff(patch)}</pre>`
-    : '<p class="chips">No differences.</p>';
+  $("mTitle").textContent = "Compare backups";
+  $("mBody").innerHTML = `<div class="chips" style="margin-bottom:8px">${esc(a)} &nbsp;→&nbsp; ${esc(b)}</div>` +
+    (patch.trim() ? `<pre class="diff">${renderDiff(patch)}</pre>` : '<p class="chips">No differences between these two versions.</p>');
+  $("modal").showModal();
+}
+async function showDiff(ref) { return showDiffBetween(ref, $("diffA").value, $("diffB").value); }
+
+async function viewBackup(ref, serial, name, prev) {
+  const res = await fetch(`/api/routers/${encodeURIComponent(ref)}/backups/${encodeURIComponent(name)}`, {
+    headers: { authorization: "Bearer " + token },
+  });
+  if (!res.ok) return toast("Could not load backup");
+  const text = await res.text();
+  const lines = text.split("\n");
+  $("mTitle").textContent = name;
+  $("mBody").innerHTML = `
+    <div class="row2" style="margin-bottom:8px">
+      <button data-dl="${esc(name)}" data-ref="${esc(ref)}" data-serial="${esc(serial)}">Download</button>
+      ${prev ? `<button data-diffab="${esc(prev)}|${esc(name)}" data-ref="${esc(ref)}">Diff vs previous</button>` : ""}
+      <span class="chips">${lines.length} lines · ${(text.length / 1024).toFixed(1)} KB</span>
+    </div>
+    <pre class="rsc">${esc(text)}</pre>`;
   $("modal").showModal();
 }
 
@@ -1078,6 +1105,9 @@ document.addEventListener("click", async (ev) => {
   if (!btn) return;
   const d = btn.dataset;
   if (d.copy != null) return copy(d.copy);
+  if (d.view != null) return viewBackup(d.ref, d.serial, d.view, d.prev).catch((e) => toast(e.message));
+  if (d.dl != null) return downloadBackup(d.ref, d.serial, d.dl).catch((e) => toast(e.message));
+  if (d.diffab != null) { const [a, b] = d.diffab.split("|"); return showDiffBetween(d.ref, a, b).catch((e) => toast(e.message)); }
   if (d.tkcopy != null) { const t = await api("/api/bootstrap-info").catch(() => null); return copy(location.origin ? `/tool fetch url="${location.origin}/bootstrap.rsc?token=${d.tkcopy}" dst-path=bootstrap.rsc; :delay 2s; /import bootstrap.rsc` : d.tkcopy, "One-liner"); }
   if (d.tkdel != null) { if (confirm("Delete this token?")) { await api("/api/tokens/" + encodeURIComponent(d.tkdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadTokens(); } return; }
   if (d.usdel != null) { if (confirm(`Remove user ${d.usdel}?`)) { await api("/api/users/" + encodeURIComponent(d.usdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadUsers(); } return; }
