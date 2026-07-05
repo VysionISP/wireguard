@@ -538,6 +538,26 @@ export function buildApp(deps: AppDeps): Express {
     res.json({ ok: true });
   });
 
+  // Permanently remove a router from the inventory. Two-step by design: a
+  // router must be revoked first, so a live device can't be deleted by
+  // accident (and its peer is already gone).
+  app.delete("/api/routers/:ref", requireAdmin, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    if (router.state !== "revoked") {
+      res.status(409).json({ error: "revoke the router before removing it" });
+      return;
+    }
+    issues.clearSerial(router.serialNumber);
+    store.delete(router.id);
+    audit.log(who(req), "remove", router.serialNumber, router.tunnelIp);
+    console.log(`removed ${router.serialNumber} from inventory`);
+    res.json({ ok: true });
+  });
+
   // The tech-facing bootstrap one-liner, for display in the UI.
   app.get("/api/bootstrap-info", requireTech, (_req: Request, res: Response) => {
     res.json({

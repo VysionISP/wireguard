@@ -257,6 +257,29 @@ describe("password management", () => {
   });
 });
 
+describe("remove router (two-step delete)", () => {
+  it("refuses to remove a router that isn't revoked, then removes it after revoke", async () => {
+    await register("DEL1", 1);
+    // not revoked → 409
+    expect((await req("delete", "/api/routers/DEL1")).status).toBe(409);
+    expect(store.findBySerial("DEL1")).toBeDefined();
+
+    await req("post", "/api/routers/DEL1/revoke");
+    const del = await req("delete", "/api/routers/DEL1");
+    expect(del.status).toBe(200);
+    expect(store.findBySerial("DEL1")).toBeUndefined();
+  });
+
+  it("delete is admin-only and 404s for unknown routers", async () => {
+    await register("DEL2", 2);
+    await req("post", "/api/routers/DEL2/revoke");
+    users.add("techd", "techpass1", "tech");
+    const login = await request(app).post("/api/login").send({ username: "techd", password: "techpass1" });
+    expect((await req("delete", "/api/routers/DEL2", `Bearer ${login.body.session}`)).status).toBe(403);
+    expect((await req("delete", "/api/routers/NOPE")).status).toBe(404);
+  });
+});
+
 describe("status board: issues, events, monitoring settings", () => {
   it("PATCH monitoring sets device type + rules and resets baseline", async () => {
     await register("MON1", 1);

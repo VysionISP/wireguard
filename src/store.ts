@@ -58,4 +58,10 @@ export class RouterStore {
     this.routers.set(record.id, record);
     this.persist();
   }
+
+  delete(id: string): boolean {
+    if (!this.routers.delete(id)) return false;
+    this.persist();
+    return true;
+  }
 }

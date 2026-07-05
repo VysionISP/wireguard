@@ -825,7 +825,9 @@ function render() {
         <button data-act="details" data-ref="${esc(r.id)}">Details</button>
         ${staged ? "" : `<button data-act="live" data-ref="${esc(r.id)}">Live</button>`}
         <button data-act="verify" data-ref="${esc(r.id)}" ${staged || r.state === "revoked" ? "disabled" : ""}>Verify</button>
-        ${isAdmin() ? `<button class="danger" data-act="revoke" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" ${r.state === "revoked" ? "disabled" : ""}>Revoke</button>` : ""}
+        ${isAdmin() ? (r.state === "revoked"
+          ? `<button class="danger" data-act="remove" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">Remove</button>`
+          : `<button class="danger" data-act="revoke" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">Revoke</button>`) : ""}
       </td>
     </tr>`;
   }).join("");
@@ -1424,6 +1426,12 @@ document.addEventListener("click", async (ev) => {
       if (!confirm(`Revoke ${d.serial}? Its tunnel drops and it can never re-register.`)) return;
       await api("/api/routers/" + encodeURIComponent(ref) + "/revoke", { method: "POST" });
       toast("Revoked " + d.serial);
+      await load();
+    }
+    if (act === "remove") {
+      if (!confirm(`Permanently remove ${d.serial} from the inventory? This cannot be undone.`)) return;
+      await api("/api/routers/" + encodeURIComponent(ref), { method: "DELETE" });
+      toast("Removed " + d.serial);
       await load();
     }
   } catch (e) { if (e.message !== "unauthorized") toast(e.message); }
