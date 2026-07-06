@@ -22,8 +22,11 @@ export interface MonitoredHost {
   enabled: boolean;
   createdAt: string;
   createdBy: string;
-  /** Latest liveness verdict from the host monitor. */
-  state?: HealthState;
+  /**
+   * Latest liveness verdict from the host monitor. "unknown" means its router
+   * is offline, so we can't tell (and deliberately don't alert on the host).
+   */
+  state?: HealthState | "unknown";
   lastOkAt?: string | null;
   lastCheckAt?: string | null;
   lastRttMs?: number | null;

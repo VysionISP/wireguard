@@ -49,8 +49,13 @@ export async function hostMonitorTick(deps: HostMonitorDeps): Promise<{ checked:
   async function checkOne(host: MonitoredHost): Promise<void> {
     const router = deps.store.findBySerial(host.routerSerial);
     if (!router || router.state === "revoked" || router.state === "staged" || !router.tunnelIp) return;
-    // Don't penalise the host when we can't even reach its router.
-    if (router.health === "offline") return;
+    // The router is down — the host is unreachable *because of that*, not on its
+    // own. Mute it: clear any host-down issue and mark it unknown, so we don't
+    // double-alert. The router-offline alert is the real signal.
+    if (router.health === "offline") {
+      muteHost(host);
+      return;
+    }
 
     let received: number | null = null;
     let rtt: number | null = null;
@@ -84,7 +89,20 @@ export async function hostMonitorTick(deps: HostMonitorDeps): Promise<{ checked:
     deps.hosts.save(host);
   }
 
-  function transition(router: RouterRecord, host: MonitoredHost, prev: HealthState, next: HealthState, at: string): void {
+  // Silence a host while its router is offline: resolve any open host-down
+  // issue and mark the host unknown. When the router returns, the next check
+  // re-evaluates from "unknown" and will re-open the issue if it's still down.
+  function muteHost(host: MonitoredHost): void {
+    let dirty = false;
+    if (host.state !== "unknown") {
+      host.state = "unknown";
+      dirty = true;
+    }
+    if (deps.issues.resolve(host.routerSerial, "host-down", `host:${host.address}`)) dirty = true;
+    if (dirty) deps.hosts.save(host);
+  }
+
+  function transition(router: RouterRecord, host: MonitoredHost, prev: HealthState | "unknown", next: HealthState, at: string): void {
     const rl = routerLabel(router);
     const label = `${hostName(host)} · ${rl}`;
     const ref = `host:${host.address}`;

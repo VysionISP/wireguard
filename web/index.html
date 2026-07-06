@@ -1722,6 +1722,7 @@ function healthDot(state) {
   if (state === "warning") return '<span class="dot warn"></span>degraded';
   if (state === "offline") return '<span class="dot off"></span>offline';
   if (state === "up") return '<span class="dot on"></span>up';
+  if (state === "unknown") return '<span class="dot off"></span><span title="its router is offline">unknown</span>';
   return '<span class="dot off"></span>pending';
 }
 async function reloadProfileHosts() {

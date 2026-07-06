@@ -85,7 +85,32 @@ describe("hostMonitorTick", () => {
     t.store.save(r);
     backdate(t.hostStore, t.host.id, 500);
     await hostMonitorTick(t.deps);
-    // Skipped — state unchanged (undefined), no issue.
+    // Muted — no host-down issue while the router is down.
     expect(t.issues.counts().critical).toBe(0);
+    expect(t.hostStore.get(t.host.id)!.state).toBe("unknown");
+  });
+
+  it("clears a host-down issue when its router goes offline, and re-opens on recovery", async () => {
+    let recv = 0;
+    const t = setup(() => ({ received: recv }));
+    // Host fully offline first (router still up): opens the issue.
+    const r0 = t.store.findBySerial("HEX1")!; r0.health = "up"; t.store.save(r0);
+    backdate(t.hostStore, t.host.id, 200);
+    // prime a baseline so the first transition isn't swallowed
+    const h = t.hostStore.get(t.host.id)!; h.state = "up"; t.hostStore.save(h);
+    await hostMonitorTick(t.deps);
+    expect(t.issues.counts().critical).toBe(1);
+
+    // Router itself drops -> host-down issue is muted away.
+    const r1 = t.store.findBySerial("HEX1")!; r1.health = "offline"; t.store.save(r1);
+    await hostMonitorTick(t.deps);
+    expect(t.issues.counts().critical).toBe(0);
+    expect(t.hostStore.get(t.host.id)!.state).toBe("unknown");
+
+    // Router back, host still down -> issue re-opens.
+    const r2 = t.store.findBySerial("HEX1")!; r2.health = "up"; t.store.save(r2);
+    backdate(t.hostStore, t.host.id, 200);
+    await hostMonitorTick(t.deps);
+    expect(t.issues.counts().critical).toBe(1);
   });
 });
