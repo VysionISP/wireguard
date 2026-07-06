@@ -25,7 +25,7 @@ import { CustomerStore } from "./customers.js";
 import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn } from "./routeros.js";
 import { MetricsStore, computeTraffic } from "./metrics.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
-import { defaultMonitoring, type RouterRecord, type DeviceType } from "./types.js";
+import { defaultMonitoring, effectivePorts, type RouterRecord, type DeviceType } from "./types.js";
 
 export interface AppDeps {
   config: Config;
@@ -932,6 +932,18 @@ export function buildApp(deps: AppDeps): Express {
         alertOnLogin: z.boolean().optional(),
         alertOnLinkDown: z.boolean().optional(),
         watchInterfaces: z.array(z.string().max(64)).max(64).optional(),
+        ports: z
+          .array(
+            z.object({
+              name: z.string().max(64),
+              link: z.boolean().default(true),
+              inverted: z.boolean().default(false),
+              highBps: z.number().min(0).optional(),
+              lowBps: z.number().min(0).optional(),
+            }),
+          )
+          .max(64)
+          .optional(),
       })
       .safeParse(req.body);
     if (!parsed.success) {
@@ -944,7 +956,14 @@ export function buildApp(deps: AppDeps): Express {
     if (p.enabled !== undefined) mon.enabled = p.enabled;
     if (p.alertOnLogin !== undefined) mon.alertOnLogin = p.alertOnLogin;
     if (p.alertOnLinkDown !== undefined) mon.alertOnLinkDown = p.alertOnLinkDown;
-    if (p.watchInterfaces !== undefined) mon.watchInterfaces = p.watchInterfaces;
+    if (p.ports !== undefined) {
+      mon.ports = p.ports;
+      // Keep the legacy field in sync so old readers still see watched ports.
+      mon.watchInterfaces = p.ports.filter((r) => r.link).map((r) => r.name);
+    } else if (p.watchInterfaces !== undefined) {
+      mon.watchInterfaces = p.watchInterfaces;
+      mon.ports = p.watchInterfaces.map((name) => ({ name, link: true, inverted: false }));
+    }
     // Changing rules invalidates the detection baseline so we re-learn cleanly.
     router.monitoring = mon;
     router.monState = { ifaceRunning: {}, seenLogins: [], initialised: false };
@@ -1301,7 +1320,8 @@ export function buildApp(deps: AppDeps): Express {
     }
     try {
       const ifaces = await fetchIfaces(router.tunnelIp, router.username, router.password);
-      res.json({ interfaces: ifaces, watched: router.monitoring?.watchInterfaces ?? [] });
+      const ports = router.monitoring ? effectivePorts(router.monitoring) : [];
+      res.json({ interfaces: ifaces, watched: ports.filter((p) => p.link).map((p) => p.name), ports });
     } catch (err) {
       res.status(502).json({ error: `router unreachable: ${(err as Error).message}` });
     }

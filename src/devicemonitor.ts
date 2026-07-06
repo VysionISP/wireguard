@@ -3,12 +3,14 @@ import type { WireguardManager } from "./wireguard.js";
 import type { IssueStore } from "./issues.js";
 import type { EventLog } from "./events.js";
 import type { Alerter } from "./alerts.js";
-import type { RouterRecord, DeviceMonitoring } from "./types.js";
+import type { RouterRecord, DeviceMonState, PortRule } from "./types.js";
+import { effectivePorts } from "./types.js";
 import {
   fetchInterfaces as realFetchInterfaces,
   fetchLog as realFetchLog,
   type FetchIfacesFn,
   type FetchLogFn,
+  type IfaceState,
   type LogEntry,
 } from "./routeros.js";
 
@@ -31,14 +33,12 @@ function labelOf(r: RouterRecord): string {
   return r.label || r.identity || r.serialNumber;
 }
 
-/**
- * Which interfaces this device's rules watch. Link-down alerts fire ONLY for
- * ports explicitly selected in watchInterfaces — an empty list watches nothing,
- * so turning on "alert on link down" without picking ports never surprises a
- * tech with alerts for interfaces they didn't opt in.
- */
-function watchedInterfaces(mon: DeviceMonitoring, all: string[]): string[] {
-  return mon.watchInterfaces.filter((n) => all.includes(n));
+/** Human-readable bits/sec, for alert text. */
+function fmtBps(bps: number): string {
+  if (!bps || bps < 1) return "0 bps";
+  const u = ["bps", "Kbps", "Mbps", "Gbps"];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(bps) / Math.log(1000)));
+  return (bps / 1000 ** i).toFixed(i ? 1 : 0) + " " + u[i];
 }
 
 /**
@@ -87,39 +87,20 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
     const mon = router.monitoring!;
     const state = (router.monState ??= { ifaceRunning: {}, seenLogins: [], initialised: false });
     const now = new Date().toISOString();
+    const tickMs = Date.now();
     let dirty = false;
 
-    // ---- interface link state
+    // ---- per-port monitoring: link state (optionally inverted) + traffic
     if (mon.alertOnLinkDown) {
-      const ifaces = await fetchIfaces(router.tunnelIp, router.username, router.password);
-      const names = ifaces.map((i) => i.name);
-      const watch = new Set(watchedInterfaces(mon, names));
-      for (const iface of ifaces) {
-        if (!watch.has(iface.name) || iface.disabled) continue;
-        const prev = state.ifaceRunning[iface.name];
-        if (prev === undefined) {
-          state.ifaceRunning[iface.name] = iface.running;
-          dirty = true;
-          continue;
-        }
-        if (prev !== iface.running) {
-          state.ifaceRunning[iface.name] = iface.running;
-          dirty = true;
-          if (!iface.running) {
-            const msg = `Port ${iface.name} link went DOWN`;
-            events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "link-down", severity: "warning", message: msg });
-            issues.open(router.serialNumber, labelOf(router), "link-down", "warning", msg, iface.name);
-            alerter.custom(router, `🟠 ${labelOf(router)}: ${msg}`, "link-down", `linkdown:${router.serialNumber}:${iface.name}`).catch(() => {});
-          } else {
-            // Only announce recovery if we'd actually opened an issue for this
-            // port — avoids a spurious "restored" when a port that was down at
-            // baseline simply comes up.
-            const hadIssue = issues.resolve(router.serialNumber, "link-down", iface.name);
-            if (hadIssue) {
-              events.add({ at: now, serialNumber: router.serialNumber, label: labelOf(router), type: "link-up", severity: "info", message: `Port ${iface.name} link restored` });
-              alerter.custom(router, `🟢 ${labelOf(router)}: port ${iface.name} link restored`, "link-up").catch(() => {});
-            }
-          }
+      const rules = new Map(effectivePorts(mon).map((p) => [p.name, p]));
+      if (rules.size > 0) {
+        const ifaces = await fetchIfaces(router.tunnelIp, router.username, router.password);
+        state.ifaceBytes ??= {};
+        state.portAlarm ??= {};
+        for (const iface of ifaces) {
+          const rule = rules.get(iface.name);
+          if (!rule || iface.disabled) continue;
+          if (evalPort(router, state, rule, iface, now, tickMs)) dirty = true;
         }
       }
     }
@@ -160,6 +141,105 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
       router.lastSeenAt = now;
       store.save(router);
     }
+  }
+
+  /**
+   * Evaluate one port against its rule: link state (optionally inverted) and
+   * traffic high/low thresholds. Returns true if any state changed (so the
+   * caller persists monState). All alerts are edge-triggered off latched state
+   * so a sustained condition doesn't re-fire every poll.
+   */
+  function evalPort(
+    router: RouterRecord,
+    state: DeviceMonState,
+    rule: PortRule,
+    iface: IfaceState,
+    now: string,
+    tickMs: number,
+  ): boolean {
+    const label = labelOf(router);
+    const name = iface.name;
+    let dirty = false;
+
+    // --- link state (inverted flips which state is the alarm) ---
+    if (rule.link) {
+      const prev = state.ifaceRunning[name];
+      if (prev === undefined) {
+        state.ifaceRunning[name] = iface.running;
+        dirty = true;
+      } else if (prev !== iface.running) {
+        state.ifaceRunning[name] = iface.running;
+        dirty = true;
+        // A running transition always flips the alarm condition, whatever the
+        // inversion: alarm = inverted ? up : down.
+        const alarm = rule.inverted ? iface.running : !iface.running;
+        if (alarm) {
+          const msg = rule.inverted
+            ? `Port ${name} came UP (expected DOWN)`
+            : `Port ${name} link went DOWN`;
+          events.add({ at: now, serialNumber: router.serialNumber, label, type: "link-down", severity: "warning", message: msg });
+          issues.open(router.serialNumber, label, "link-down", "warning", msg, name);
+          alerter.custom(router, `🟠 ${label}: ${msg}`, "link-down", `linkdown:${router.serialNumber}:${name}`).catch(() => {});
+        } else {
+          const hadIssue = issues.resolve(router.serialNumber, "link-down", name);
+          if (hadIssue) {
+            const msg = rule.inverted
+              ? `Port ${name} returned to DOWN (expected)`
+              : `Port ${name} link restored`;
+            events.add({ at: now, serialNumber: router.serialNumber, label, type: "link-up", severity: "info", message: msg });
+            alerter.custom(router, `🟢 ${label}: ${msg}`, "link-up").catch(() => {});
+          }
+        }
+      }
+    }
+
+    // --- traffic thresholds (combined rx+tx bits/sec) ---
+    if (rule.highBps || rule.lowBps) {
+      const prevB = state.ifaceBytes![name];
+      const alarm = (state.portAlarm![name] ??= {});
+      let bps: number | null = null;
+      if (prevB) {
+        const dt = (tickMs - prevB.at) / 1000;
+        if (dt > 0) {
+          const drx = iface.rxByte >= prevB.rx ? iface.rxByte - prevB.rx : 0;
+          const dtx = iface.txByte >= prevB.tx ? iface.txByte - prevB.tx : 0;
+          bps = ((drx + dtx) * 8) / dt;
+        }
+      }
+      state.ifaceBytes![name] = { rx: iface.rxByte, tx: iface.txByte, at: tickMs };
+      dirty = true;
+      if (bps !== null) {
+        // High: fire when crossing above; clear with 10% hysteresis.
+        if (rule.highBps) {
+          if (!alarm.high && bps > rule.highBps) {
+            alarm.high = true;
+            const msg = `Port ${name} traffic ${fmtBps(bps)} above threshold ${fmtBps(rule.highBps)}`;
+            events.add({ at: now, serialNumber: router.serialNumber, label, type: "traffic-high", severity: "warning", message: msg });
+            issues.open(router.serialNumber, label, "traffic-high", "warning", msg, name);
+            alerter.custom(router, `🔺 ${label}: ${msg}`, "traffic-high", `trafhigh:${router.serialNumber}:${name}`).catch(() => {});
+          } else if (alarm.high && bps < rule.highBps * 0.9) {
+            alarm.high = false;
+            issues.resolve(router.serialNumber, "traffic-high", name);
+            alerter.custom(router, `✅ ${label}: port ${name} traffic back below ${fmtBps(rule.highBps)}`, "traffic-high").catch(() => {});
+          }
+        }
+        // Low: only meaningful while the link is up.
+        if (rule.lowBps) {
+          if (!alarm.low && iface.running && bps < rule.lowBps) {
+            alarm.low = true;
+            const msg = `Port ${name} traffic ${fmtBps(bps)} below threshold ${fmtBps(rule.lowBps)}`;
+            events.add({ at: now, serialNumber: router.serialNumber, label, type: "traffic-low", severity: "warning", message: msg });
+            issues.open(router.serialNumber, label, "traffic-low", "warning", msg, name);
+            alerter.custom(router, `🔻 ${label}: ${msg}`, "traffic-low", `traflow:${router.serialNumber}:${name}`).catch(() => {});
+          } else if (alarm.low && (!iface.running || bps > rule.lowBps * 1.1)) {
+            alarm.low = false;
+            issues.resolve(router.serialNumber, "traffic-low", name);
+            alerter.custom(router, `✅ ${label}: port ${name} traffic back above ${fmtBps(rule.lowBps)}`, "traffic-low").catch(() => {});
+          }
+        }
+      }
+    }
+    return dirty;
   }
 }
 

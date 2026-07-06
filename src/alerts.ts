@@ -3,13 +3,25 @@ import type { RouterRecord } from "./types.js";
 import type { SettingsStore, RouteKey } from "./settings.js";
 import { telegram as realTelegram, type TelegramClient } from "./telegram.js";
 
-type AlertEvent = "offline" | "online" | "registered" | "login" | "link-down" | "link-up";
+type AlertEvent =
+  | "offline"
+  | "online"
+  | "registered"
+  | "login"
+  | "link-down"
+  | "link-up"
+  | "traffic-high"
+  | "traffic-low";
 
 export type SendFn = (text: string, event: AlertEvent, router: RouterRecord) => Promise<void>;
 
 /** Maps an alert event to the notification category a chat subscribes to. */
 export function routeKey(event: AlertEvent): RouteKey {
-  return event === "link-down" || event === "link-up" ? "link" : event;
+  // Link flaps and traffic-threshold alerts are both port-health signals and
+  // share the "link" subscription category.
+  return event === "link-down" || event === "link-up" || event === "traffic-high" || event === "traffic-low"
+    ? "link"
+    : event;
 }
 
 function routerName(r: RouterRecord): string {

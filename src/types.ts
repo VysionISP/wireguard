@@ -47,15 +47,44 @@ export interface RouterRecord {
   monState?: DeviceMonState;
 }
 
+/** Per-port monitoring rule. A device watches zero or more of these. */
+export interface PortRule {
+  /** Interface name, e.g. "ether1" / "sfp-sfpplus1". */
+  name: string;
+  /** Alert on link state changes for this port. */
+  link: boolean;
+  /**
+   * Invert the link logic: the alarm state is the port being UP, and DOWN is
+   * "normal". Use for ports that are meant to stay unplugged (a spare WAN, a
+   * disabled uplink) so someone plugging in gets flagged.
+   */
+  inverted: boolean;
+  /** Alert when combined throughput rises above this many bits/sec (0 = off). */
+  highBps?: number;
+  /** Alert when combined throughput (while up) falls below this many bits/sec (0 = off). */
+  lowBps?: number;
+}
+
 export interface DeviceMonitoring {
   /** Master switch: poll this device over the tunnel for logins / link state. */
   enabled: boolean;
   /** Notify + log when someone logs into the router (Winbox/SSH/WebFig/etc). */
   alertOnLogin: boolean;
-  /** Notify + raise an issue when a watched port's link drops. */
+  /** Master switch for port monitoring (link state + traffic thresholds). */
   alertOnLinkDown: boolean;
-  /** Ports to watch for link-down; empty = watch nothing (opt in per port). */
+  /** Legacy plain watch-list (link-down only); migrated into `ports`. */
   watchInterfaces: string[];
+  /** Per-port rules: link (optionally inverted) + traffic thresholds. */
+  ports?: PortRule[];
+}
+
+/**
+ * The effective set of port rules, migrating a legacy plain watch-list into
+ * the richer per-port shape (link on, not inverted, no traffic thresholds).
+ */
+export function effectivePorts(mon: DeviceMonitoring): PortRule[] {
+  if (mon.ports && mon.ports.length) return mon.ports;
+  return (mon.watchInterfaces ?? []).map((name) => ({ name, link: true, inverted: false }));
 }
 
 /** Default monitoring rules for a device type. */
@@ -67,12 +96,17 @@ export function defaultMonitoring(type: DeviceType, alertOnLogin: boolean, alert
     // single uplink dropping is often just the customer's own power/modem.
     alertOnLinkDown: type === "infrastructure" ? true : alertOnLinkDown,
     watchInterfaces: [],
+    ports: [],
   };
 }
 
 export interface DeviceMonState {
   /** Last known running state per interface, to detect transitions. */
   ifaceRunning: Record<string, boolean>;
+  /** Last counter reading per interface, to derive throughput between polls. */
+  ifaceBytes?: Record<string, { rx: number; tx: number; at: number }>;
+  /** Latched traffic-threshold alarm state per interface (edge-triggering). */
+  portAlarm?: Record<string, { high?: boolean; low?: boolean }>;
   /** Recently-seen login log signatures (bounded) so we don't re-alert. */
   seenLogins: string[];
   /** False until the first successful poll establishes a baseline. */

@@ -6,6 +6,8 @@ export type EventType =
   | "logout"
   | "link-down"
   | "link-up"
+  | "traffic-high"
+  | "traffic-low"
   | "offline"
   | "online"
   | "backup"

@@ -146,6 +146,53 @@ describe("deviceMonitorTick", () => {
     expect(alerts.some((a) => /link went DOWN/i.test(a))).toBe(false);
   });
 
+  it("inverted link rule alerts when a port that should stay DOWN comes UP", async () => {
+    const store = new RouterStore(path.join(tempDir(), "routers.json"));
+    const r = router("INV1", 11);
+    r.monitoring!.ports = [{ name: "ether5", link: true, inverted: true }];
+    store.save(r);
+    const issues = new IssueStore(path.join(tempDir(), "issues.json"));
+    const events = new EventLog(path.join(tempDir(), "events.jsonl"));
+    const alerts: string[] = [];
+    const alerter = new Alerter({ webhookUrl: "https://h.test", notifyOnRegister: true, notifyOnline: true, suppressMinutes: 0 } as any, async (t) => { alerts.push(t); });
+    let ifaces: IfaceState[] = [{ name: "ether5", type: "ether", running: false, disabled: false, rxByte: 0, txByte: 0 }];
+    const deps = {
+      store, wg: wgFresh([fakeKey(11)]), issues, events, alerter, offlineAfterSeconds: 180,
+      managementUsername: "wg-mgmt", fetchInterfaces: async () => ifaces, fetchLog: async () => [],
+    };
+    await deviceMonitorTick(deps); // baseline: down = expected, no alarm
+    expect(issues.counts().warning).toBe(0);
+    ifaces = [{ name: "ether5", type: "ether", running: true, disabled: false, rxByte: 0, txByte: 0 }];
+    await deviceMonitorTick(deps);
+    expect(issues.counts().warning).toBe(1);
+    expect(events.forSerial("INV1").some((e) => /came UP/i.test(e.message))).toBe(true);
+    expect(alerts.some((a) => /came UP/i.test(a))).toBe(true);
+  });
+
+  it("traffic-high threshold opens an issue when throughput crosses it", async () => {
+    const store = new RouterStore(path.join(tempDir(), "routers.json"));
+    const r = router("TRF1", 12);
+    r.monitoring!.ports = [{ name: "ether1", link: false, inverted: false, highBps: 1000 }];
+    store.save(r);
+    const issues = new IssueStore(path.join(tempDir(), "issues.json"));
+    const events = new EventLog(path.join(tempDir(), "events.jsonl"));
+    const alerts: string[] = [];
+    const alerter = new Alerter({ webhookUrl: "https://h.test", notifyOnRegister: true, notifyOnline: true, suppressMinutes: 0 } as any, async (t) => { alerts.push(t); });
+    let ifaces: IfaceState[] = [{ name: "ether1", type: "ether", running: true, disabled: false, rxByte: 0, txByte: 0 }];
+    const deps = {
+      store, wg: wgFresh([fakeKey(12)]), issues, events, alerter, offlineAfterSeconds: 180,
+      managementUsername: "wg-mgmt", fetchInterfaces: async () => ifaces, fetchLog: async () => [],
+    };
+    await deviceMonitorTick(deps); // baseline counters, no rate yet
+    expect(issues.counts().warning).toBe(0);
+    await new Promise((r) => setTimeout(r, 10)); // ensure a non-zero sampling interval
+    ifaces = [{ name: "ether1", type: "ether", running: true, disabled: false, rxByte: 5_000_000, txByte: 0 }];
+    await deviceMonitorTick(deps);
+    expect(issues.list().some((i) => i.type === "traffic-high")).toBe(true);
+    expect(events.forSerial("TRF1").some((e) => e.type === "traffic-high")).toBe(true);
+    expect(alerts.some((a) => /above threshold/i.test(a))).toBe(true);
+  });
+
   it("collapses duplicate logins and ignores the management account's own polls", async () => {
     const store = new RouterStore(path.join(tempDir(), "routers.json"));
     store.save(router("INFRA2", 3));

@@ -3,7 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 export type Severity = "critical" | "warning";
-export type IssueType = "offline" | "link-down" | "login" | "monitor-error";
+export type IssueType =
+  | "offline"
+  | "link-down"
+  | "traffic-high"
+  | "traffic-low"
+  | "login"
+  | "monitor-error";
 
 export interface Issue {
   id: string;

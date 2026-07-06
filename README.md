@@ -242,10 +242,21 @@ emphasises. Link-down still only fires for the specific ports you select. New
 routers default to customer with monitoring on.
 
 Per-device monitoring is fully configurable in the details view (admin):
-device type, master on/off, alert-on-login, alert-on-link-down, and which
-ports to watch. Link-down alerts fire only for ports you explicitly select in
-the port map — a blank list watches nothing, so no port alerts until you opt
-each one in.
+device type, master on/off, alert-on-login, and per-port rules. Click a port
+in the faceplate map to open its rule dialog:
+
+- **Monitor link status** — alert when the link drops (and clears when it
+  recovers).
+- **Inverted** — the port is *meant* to stay unplugged (a spare WAN, a
+  disabled uplink), so the alarm is the port coming **UP**, and DOWN is normal.
+- **Traffic above / below** — alert when the port's combined rx+tx throughput
+  crosses a threshold (e.g. above 800 Mbps = saturated uplink; below 1 Mbps on
+  a link that should be busy = something's wrong). Thresholds are
+  edge-triggered with hysteresis, so a sustained condition alerts once and
+  clears once, not every tick.
+
+Ports with no rule are not monitored at all — you opt each one in. A port can
+combine checks (e.g. link status *and* a high-traffic threshold).
 
 ## Customers & network map
 

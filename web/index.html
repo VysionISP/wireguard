@@ -343,6 +343,14 @@
   .port .lbl { font-family: var(--mono); font-size: 9px; color: var(--muted); white-space: nowrap; letter-spacing: -.02em; }
   .port.watched .jack { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 12px -2px var(--accent); }
   .port.watched .lbl { color: var(--accent); }
+  .port .pbadge { font-family: var(--mono); font-size: 8px; color: var(--accent); letter-spacing: -.02em; white-space: nowrap; margin-top: -2px; }
+  .pcopt { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .pcopt label { font-size: 13px; }
+  .pcnum label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+  .pcnum .r { display: flex; gap: 6px; align-items: center; }
+  .pcnum input { width: 92px; background: var(--bg); border: 1px solid var(--border2); color: var(--text); border-radius: 3px; padding: 5px 8px; font: inherit; font-size: 13px; }
+  .pcnum select { background: var(--bg); border: 1px solid var(--border2); color: var(--text); border-radius: 3px; padding: 5px 6px; font: inherit; font-size: 12px; }
+  .pcbtns { display: flex; gap: 10px; margin-top: 12px; }
   .port:not(.disabled):hover .jack { border-color: var(--accent-dim); }
   .plegend { display: flex; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
   .plegend span { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
@@ -715,6 +723,28 @@
 <dialog id="profile" class="wide">
   <div class="dhead"><h3 id="pTitle"></h3><button onclick="closeProfile()">Close</button></div>
   <div class="dbody" id="pBody"></div>
+</dialog>
+
+<dialog id="portcfg">
+  <div class="dhead"><h3 id="pcTitle"></h3><button onclick="document.getElementById('portcfg').close()">Close</button></div>
+  <div class="dbody">
+    <p class="chips" id="pcState"></p>
+    <div class="pcopt">
+      <label><input type="checkbox" id="pcLink"> Monitor link status <span class="chips">(alert when the link drops)</span></label>
+      <label style="margin-left:20px"><input type="checkbox" id="pcInv"> Inverted <span class="chips">(port should stay DOWN — alert when it comes UP)</span></label>
+    </div>
+    <div class="pcopt">
+      <div class="pcnum"><label>Alert if traffic goes <b>above</b></label>
+        <div class="r"><input type="number" id="pcHigh" min="0" step="1" placeholder="0 = off"> <select id="pcHighU"><option>Mbps</option><option>Kbps</option><option>Gbps</option></select></div></div>
+      <div class="pcnum"><label>Alert if traffic drops <b>below</b> (while up)</label>
+        <div class="r"><input type="number" id="pcLow" min="0" step="1" placeholder="0 = off"> <select id="pcLowU"><option>Mbps</option><option>Kbps</option><option>Gbps</option></select></div></div>
+    </div>
+    <p class="chips">Traffic is the combined download+upload rate, sampled every device-monitor tick. Thresholds are edge-triggered — one alert when crossed, one when it recovers.</p>
+    <div class="pcbtns">
+      <button class="primary" id="pcSave">Save port</button>
+      <button class="danger" id="pcRemove">Stop monitoring this port</button>
+    </div>
+  </div>
 </dialog>
 
 <div id="toast"></div>
@@ -1278,7 +1308,7 @@ async function openDetails(ref) {
   const transitions = (r.transitions || []).slice(-6).reverse();
   const mon = r.monitoring || { enabled: false, alertOnLogin: true, alertOnLinkDown: true };
   const dtype = r.deviceType || "customer";
-  portState = { ref: null, watch: new Set() }; // reset faceplate for this device
+  portState = { ref: null, rules: new Map() }; // reset faceplate for this device
   const backOpts = backups.map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
   $("dBody").innerHTML = `
     <dl class="kv">
@@ -1321,8 +1351,8 @@ async function openDetails(ref) {
       </div>
       <label><input type="checkbox" id="monEnabled" ${mon.enabled ? "checked" : ""}> Active monitoring (poll this device over the tunnel)</label>
       <label><input type="checkbox" id="monLogin" ${mon.alertOnLogin ? "checked" : ""}> Alert &amp; log on router login (Winbox/SSH/WebFig/API)</label>
-      <label><input type="checkbox" id="monLink" ${mon.alertOnLinkDown ? "checked" : ""}> Alert when a watched port's link drops</label>
-      <div class="r"><span class="chips">Port map — click a port to watch its link state</span></div>
+      <label><input type="checkbox" id="monLink" ${mon.alertOnLinkDown ? "checked" : ""}> Enable port monitoring (link status + traffic thresholds)</label>
+      <div class="r"><span class="chips">Port map — click a port to set link status, inverted link, or traffic alerts</span></div>
       <div id="portmap"><span class="chips">loading ports…</span></div>
       <div class="r"><span class="chips">Watch ports</span>
         <input id="monIfaces" placeholder="blank = no ports watched" value="${esc((mon.watchInterfaces || []).join(", "))}" style="flex:1;min-width:160px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px;font-family:var(--mono);font-size:12px">
@@ -1372,7 +1402,8 @@ async function openDetails(ref) {
 }
 
 /* ---------------- port map (router faceplate) ---------------- */
-let portState = { ref: null, watch: new Set() };
+// rules: Map<portName, {name, link, inverted, highBps, lowBps}>
+let portState = { ref: null, rules: new Map() };
 const PORT_RE = /^(ether|sfp|sfp-plus|sfpplus|qsfp|combo|wlan|lte|wifi)/i;
 function isPortType(i) { return PORT_RE.test(i.type) || PORT_RE.test(i.name); }
 function sfpish(i) { return /sfp|qsfp/i.test(i.type) || /sfp|qsfp/i.test(i.name); }
@@ -1386,9 +1417,13 @@ async function loadPortMap(ref) {
   let data;
   try { data = await api("/api/routers/" + encodeURIComponent(ref) + "/interfaces"); }
   catch (e) { box.innerHTML = `<span class="chips">${esc(e.message)} — type port names in the field below instead.</span>`; return; }
-  // Merge server-side watched list with anything already typed in the field.
-  const typed = ($("monIfaces").value || "").split(",").map((s) => s.trim()).filter(Boolean);
-  portState = { ref, watch: new Set([...(data.watched || []), ...typed]) };
+  const rules = new Map();
+  for (const p of (data.ports && data.ports.length ? data.ports : (data.watched || []).map((n) => ({ name: n, link: true, inverted: false }))))
+    rules.set(p.name, { name: p.name, link: p.link !== false, inverted: !!p.inverted, highBps: p.highBps || 0, lowBps: p.lowBps || 0 });
+  // Merge anything typed into the legacy field as a plain link watch.
+  for (const n of ($("monIfaces").value || "").split(",").map((s) => s.trim()).filter(Boolean))
+    if (!rules.has(n)) rules.set(n, { name: n, link: true, inverted: false, highBps: 0, lowBps: 0 });
+  portState = { ref, rules, ifaces: data.interfaces || [] };
   renderPortMap(data.interfaces || []);
 }
 function renderPortMap(interfaces) {
@@ -1403,11 +1438,21 @@ function renderPortMap(interfaces) {
     cur.push(i);
   }
   const portCell = (i) => {
+    const rule = portState.rules.get(i.name);
     const cls = ["port", sfpish(i) ? "sfp" : "", i.disabled ? "disabled" : (i.running ? "up" : "down"),
-      portState.watch.has(i.name) ? "watched" : ""].join(" ");
+      rule ? "watched" : ""].join(" ");
     const st = i.disabled ? "disabled" : i.running ? "link up" : "link down";
-    return `<div class="${cls}" data-port="${esc(i.name)}" title="${esc(i.name)} · ${esc(i.type)} · ${st}">
-      <div class="led"></div><div class="jack"></div><div class="lbl">${esc(i.name)}</div></div>`;
+    let badge = "";
+    if (rule) {
+      const bits = [];
+      if (rule.link) bits.push(rule.inverted ? "↕inv" : "link");
+      if (rule.highBps) bits.push("▲" + fmtBps(rule.highBps));
+      if (rule.lowBps) bits.push("▼" + fmtBps(rule.lowBps));
+      badge = `<div class="pbadge">${esc(bits.join(" ") || "—")}</div>`;
+    }
+    const tip = rule ? `${i.name} · ${st} · ${ruleSummary(rule)}` : `${i.name} · ${i.type} · ${st} · click to monitor`;
+    return `<div class="${cls}" data-port="${esc(i.name)}" title="${esc(tip)}">
+      <div class="led"></div><div class="jack"></div><div class="lbl">${esc(i.name)}</div>${badge}</div>`;
   };
   box.innerHTML = `<div class="faceplate"><div class="ports">` +
     groups.map((g) => `<div class="pgroup">${g.map(portCell).join("")}</div>`).join("") +
@@ -1416,32 +1461,89 @@ function renderPortMap(interfaces) {
       <span><i style="background:var(--green);box-shadow:0 0 6px var(--green)"></i>link up</span>
       <span><i style="background:#35424f"></i>link down</span>
       <span><i style="background:#202d3b"></i>disabled</span>
-      <span><i style="background:none;box-shadow:0 0 0 1px var(--accent)"></i>watched</span>
+      <span><i style="background:none;box-shadow:0 0 0 1px var(--accent)"></i>monitored</span>
     </div>
     <div class="chips" id="portsum" style="margin-top:6px"></div>`;
   updatePortSummary();
 }
+const BPS_UNIT = { Kbps: 1e3, Mbps: 1e6, Gbps: 1e9 };
+function bpsToUnit(bps) { // pick a sensible unit for editing
+  if (!bps) return { val: "", unit: "Mbps" };
+  if (bps >= 1e9) return { val: +(bps / 1e9).toFixed(3), unit: "Gbps" };
+  if (bps >= 1e6) return { val: +(bps / 1e6).toFixed(3), unit: "Mbps" };
+  return { val: +(bps / 1e3).toFixed(3), unit: "Kbps" };
+}
+function openPortCfg(name) {
+  const iface = (portState.ifaces || []).find((i) => i.name === name);
+  const rule = portState.rules.get(name) || { name, link: true, inverted: false, highBps: 0, lowBps: 0 };
+  $("pcTitle").textContent = "Monitor port " + name;
+  const st = iface ? (iface.disabled ? "disabled" : iface.running ? "link up" : "link down") : "";
+  $("pcState").innerHTML = `Port <b class="mono">${esc(name)}</b>${st ? " · currently <b>" + esc(st) + "</b>" : ""}`;
+  $("pcLink").checked = rule.link !== false;
+  $("pcInv").checked = !!rule.inverted;
+  const hi = bpsToUnit(rule.highBps), lo = bpsToUnit(rule.lowBps);
+  $("pcHigh").value = hi.val; $("pcHighU").value = hi.unit;
+  $("pcLow").value = lo.val; $("pcLowU").value = lo.unit;
+  $("pcRemove").style.display = portState.rules.has(name) ? "" : "none";
+  $("pcSave").dataset.port = name;
+  $("pcRemove").dataset.port = name;
+  $("portcfg").showModal();
+}
+function savePortCfg(name) {
+  const hv = parseFloat($("pcHigh").value) || 0, lv = parseFloat($("pcLow").value) || 0;
+  const highBps = Math.round(hv * BPS_UNIT[$("pcHighU").value]);
+  const lowBps = Math.round(lv * BPS_UNIT[$("pcLowU").value]);
+  const link = $("pcLink").checked, inverted = $("pcInv").checked;
+  if (!link && !highBps && !lowBps) {
+    // nothing selected == stop monitoring this port
+    portState.rules.delete(name);
+  } else {
+    portState.rules.set(name, { name, link, inverted, highBps, lowBps });
+  }
+  $("portcfg").close();
+  // Re-render the faceplate to reflect the new badge/state.
+  renderPortMap(portState.ifaces || []);
+  toast(portState.rules.has(name) ? "Port " + name + " configured — click Save monitoring to apply" : "Port " + name + " no longer monitored — click Save monitoring to apply");
+}
+function ruleSummary(r) {
+  const parts = [];
+  if (r.link) parts.push(r.inverted ? "inverted link (alarm when UP)" : "link status");
+  if (r.highBps) parts.push("high > " + fmtBps(r.highBps));
+  if (r.lowBps) parts.push("low < " + fmtBps(r.lowBps));
+  return parts.length ? parts.join(", ") : "no checks";
+}
 function updatePortSummary() {
-  const arr = [...portState.watch];
+  const rules = [...portState.rules.values()];
   const el = $("portsum");
-  if (el) el.innerHTML = arr.length
-    ? `Watching link state on <b>${arr.length}</b> port(s): <span class="mono" style="color:var(--accent)">${arr.map(esc).join(", ")}</span>`
-    : "No ports selected — link-down alerts are off for this device. Click a port above to watch it.";
+  if (el) el.innerHTML = rules.length
+    ? `Monitoring <b>${rules.length}</b> port(s): ` + rules.map((r) =>
+        `<span class="mono" style="color:var(--accent)">${esc(r.name)}</span>`).join(", ") + ". Click a port to edit."
+    : "No ports monitored — click a port above to set up link status and/or traffic alerts.";
   const f = $("monIfaces");
-  if (f) f.value = arr.join(", ");
+  if (f) f.value = rules.filter((r) => r.link).map((r) => r.name).join(", ");
 }
 
 async function saveMonitoring(ref) {
-  const watch = $("monIfaces").value.split(",").map((s) => s.trim()).filter(Boolean);
+  // Prefer the rich per-port rules from the faceplate; fall back to the typed
+  // field if the port map never loaded (device offline).
+  let ports;
+  if (portState.ref === ref && portState.rules.size >= 0 && $("portmap").querySelector(".faceplate")) {
+    ports = [...portState.rules.values()].map((r) => ({
+      name: r.name, link: !!r.link, inverted: !!r.inverted,
+      highBps: r.highBps || 0, lowBps: r.lowBps || 0,
+    }));
+  }
+  const body = {
+    deviceType: $("monType").value,
+    enabled: $("monEnabled").checked,
+    alertOnLogin: $("monLogin").checked,
+    alertOnLinkDown: $("monLink").checked,
+  };
+  if (ports) body.ports = ports;
+  else body.watchInterfaces = $("monIfaces").value.split(",").map((s) => s.trim()).filter(Boolean);
   await api("/api/routers/" + encodeURIComponent(ref) + "/monitoring", {
     method: "PATCH", headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      deviceType: $("monType").value,
-      enabled: $("monEnabled").checked,
-      alertOnLogin: $("monLogin").checked,
-      alertOnLinkDown: $("monLink").checked,
-      watchInterfaces: watch,
-    }),
+    body: JSON.stringify(body),
   });
   toast("Monitoring updated");
   $("details").close();
@@ -1982,17 +2084,15 @@ document.addEventListener("click", async (ev) => {
   const portEl = ev.target.closest(".port");
   if (portEl && portState.ref) {
     if (portEl.classList.contains("disabled")) { toast("Port is disabled — enable it on the router first"); return; }
-    const name = portEl.dataset.port;
-    if (portState.watch.has(name)) portState.watch.delete(name);
-    else portState.watch.add(name);
-    portEl.classList.toggle("watched");
-    updatePortSummary();
+    openPortCfg(portEl.dataset.port);
     return;
   }
   const link = ev.target.closest("a[data-dl]");
   if (link) { ev.preventDefault(); return downloadBackup(link.dataset.ref, link.dataset.serial, link.dataset.dl).catch((e) => toast(e.message)); }
   const btn = ev.target.closest("button");
   if (!btn) return;
+  if (btn.id === "pcSave") return savePortCfg(btn.dataset.port);
+  if (btn.id === "pcRemove") { portState.rules.delete(btn.dataset.port); $("portcfg").close(); renderPortMap(portState.ifaces || []); return toast("Port no longer monitored — click Save monitoring to apply"); }
   const d = btn.dataset;
   if (d.copy != null) return copy(d.copy);
   if (d.view != null) return viewBackup(d.ref, d.serial, d.view, d.prev).catch((e) => toast(e.message));
