@@ -779,7 +779,7 @@
     <div class="panel" id="slaDevPanel" style="display:none">
       <h2>By device</h2>
       <div class="tablewrap"><table>
-        <thead><tr><th>Device</th><th>Customer</th><th>Uptime</th><th>Downtime</th><th>Outages</th><th>Longest</th><th>Planned</th></tr></thead>
+        <thead><tr><th>Device</th><th>Customer</th><th>Uptime</th><th>Target</th><th>Status</th><th>Downtime</th><th>Outages</th><th>Longest</th><th>Planned</th></tr></thead>
         <tbody id="slaDevRows"></tbody>
       </table></div>
     </div>
@@ -1427,6 +1427,10 @@ async function openDetails(ref) {
       <label for="mGroup">Customer <span class="chips">(groups this device under a customer — for search, the fleet view and the network map)</span></label>
       <input id="mGroup" list="custList" value="${esc(r.customerGroup || "")}" placeholder="pick or type a customer">
       <datalist id="custList"></datalist>
+      <label for="mSla">SLA target <span class="chips">(uptime commitment shown in reports)</span></label>
+      <select id="mSla" style="width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:6px 10px;font:inherit;font-size:13px;margin:4px 0 10px">
+        ${[["0", "None"], ["99", "99% (standard)"], ["99.5", "99.5%"], ["99.9", "99.9% (three nines)"], ["99.95", "99.95%"], ["99.99", "99.99% (four nines)"]].map(([v, l]) => `<option value="${v}" ${String(r.slaTarget || 0) === v ? "selected" : ""}>${l}</option>`).join("")}
+      </select>
       <label for="mNotes">Notes</label>
       <textarea id="mNotes" placeholder="anything worth remembering about this install">${esc(r.notes || "")}</textarea>
       <button class="primary" data-act="savemeta" data-ref="${esc(r.id)}">Save</button>
@@ -1673,7 +1677,7 @@ async function saveMeta(ref) {
   await api("/api/routers/" + encodeURIComponent(ref), {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ label: $("mLabel").value.trim(), notes: $("mNotes").value, customerGroup: $("mGroup").value.trim() }),
+    body: JSON.stringify({ label: $("mLabel").value.trim(), notes: $("mNotes").value, customerGroup: $("mGroup").value.trim(), slaTarget: Number($("mSla").value) || 0 }),
   });
   toast("Saved");
   $("details").close();
@@ -2352,6 +2356,7 @@ async function runSla() {
       <div class="s"><div class="v">${f.devices}</div><div class="k">Devices</div></div>
       <div class="s"><div class="v">${fmtDur(f.downMs)}</div><div class="k">Unplanned downtime</div></div>
       <div class="s"><div class="v">${f.outages}</div><div class="k">Outages</div></div>
+      ${f.withTarget ? `<div class="s"><div class="v" style="color:var(--${f.breaching ? "red" : "green"})">${f.breaching}/${f.withTarget}</div><div class="k">Breaching SLA</div></div>` : ""}
     </div>
     <div class="chips" style="margin-top:6px">${esc(new Date(r.from).toLocaleDateString())} → ${esc(new Date(r.to).toLocaleDateString())} · planned maintenance excluded</div>`;
   $("slaCustPanel").style.display = r.customers.length ? "" : "none";
@@ -2360,16 +2365,23 @@ async function runSla() {
     <td><span class="pill ${slaClass(c.uptimePct)}">${c.uptimePct.toFixed(3)}%</span></td>
     <td>${fmtDur(c.downMs)}</td><td>${c.outages}</td></tr>`).join("");
   $("slaDevPanel").style.display = r.devices.length ? "" : "none";
-  $("slaDevRows").innerHTML = r.devices.map((d) => `<tr>
+  $("slaDevRows").innerHTML = r.devices.map((d) => {
+    const status = d.meetsTarget === null ? '<span style="color:var(--muted)">—</span>'
+      : d.meetsTarget ? '<span class="pill verified">✓ met</span>'
+      : '<span class="pill revoked">✗ breached</span>';
+    return `<tr>
     <td>${esc(d.label)}</td><td>${d.customerGroup ? esc(d.customerGroup) : '<span style="color:var(--muted)">—</span>'}</td>
     <td><span class="pill ${slaClass(d.uptimePct)}">${d.uptimePct.toFixed(3)}%</span></td>
+    <td>${d.slaTarget != null ? d.slaTarget + "%" : '<span style="color:var(--muted)">—</span>'}</td>
+    <td>${status}</td>
     <td>${fmtDur(d.downMs)}</td><td>${d.outages}</td><td>${fmtDur(d.longestMs)}</td>
-    <td>${d.excludedMs ? fmtDur(d.excludedMs) : "—"}</td></tr>`).join("");
+    <td>${d.excludedMs ? fmtDur(d.excludedMs) : "—"}</td></tr>`;
+  }).join("");
 }
 function slaCsv() {
   const r = window._sla; if (!r) return toast("Generate a report first");
-  const rows = [["Device", "Customer", "Uptime %", "Downtime (s)", "Outages", "Longest (s)", "Planned excl (s)"]];
-  for (const d of r.devices) rows.push([d.label, d.customerGroup || "", d.uptimePct.toFixed(4), Math.round(d.downMs / 1000), d.outages, Math.round(d.longestMs / 1000), Math.round(d.excludedMs / 1000)]);
+  const rows = [["Device", "Customer", "Uptime %", "Target %", "Status", "Downtime (s)", "Outages", "Longest (s)", "Planned excl (s)"]];
+  for (const d of r.devices) rows.push([d.label, d.customerGroup || "", d.uptimePct.toFixed(4), d.slaTarget ?? "", d.meetsTarget === null ? "" : d.meetsTarget ? "met" : "breached", Math.round(d.downMs / 1000), d.outages, Math.round(d.longestMs / 1000), Math.round(d.excludedMs / 1000)]);
   const csv = rows.map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
   const a = document.createElement("a");

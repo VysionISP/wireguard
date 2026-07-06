@@ -54,6 +54,7 @@ describe("GET /api/reports/sla", () => {
     expect(dev.uptimePct).toBeGreaterThan(98.5);
     expect(dev.uptimePct).toBeLessThan(99.5);
     expect(dev.outages).toBe(1);
+    expect(dev.slaTarget).toBeNull(); // none set
     expect(res.body.customers[0].name).toBe("Acme");
     expect(res.body.fleet.devices).toBe(1);
   });
@@ -74,5 +75,23 @@ describe("GET /api/reports/sla", () => {
     const dev = res.body.devices.find((d: any) => d.serialNumber === "HEX2");
     expect(dev.uptimePct).toBe(100); // the outage was planned
     expect(dev.downMs).toBe(0);
+  });
+
+  it("flags a device that breaches its per-router SLA target", async () => {
+    await register("HEX3", 3);
+    const r = store.findBySerial("HEX3")!;
+    r.createdAt = new Date(Date.now() - 100 * H).toISOString();
+    r.slaTarget = 99.9;
+    store.save(r);
+    // 2h outage over 100h -> ~98% uptime, below the 99.9% target.
+    outages.open("HEX3", "HEX3", new Date(Date.now() - 50 * H).toISOString());
+    outages.close("HEX3", new Date(Date.now() - 48 * H).toISOString());
+
+    const from = Date.now() - 100 * H;
+    const res = await request(app).get(`/api/reports/sla?from=${from}&to=${Date.now()}`).set("authorization", A());
+    const dev = res.body.devices.find((d: any) => d.serialNumber === "HEX3");
+    expect(dev.slaTarget).toBe(99.9);
+    expect(dev.meetsTarget).toBe(false);
+    expect(res.body.fleet.breaching).toBeGreaterThanOrEqual(1);
   });
 });

@@ -100,6 +100,8 @@ const patchSchema = z.object({
   label: z.string().max(120).optional(),
   notes: z.string().max(4000).optional(),
   customerGroup: z.string().max(80).optional(),
+  /** Committed uptime target %, 0 clears it. */
+  slaTarget: z.number().min(0).max(100).optional(),
 });
 
 export function buildApp(deps: AppDeps): Express {
@@ -476,6 +478,7 @@ export function buildApp(deps: AppDeps): Express {
     if (parsed.data.label !== undefined) router.label = parsed.data.label;
     if (parsed.data.notes !== undefined) router.notes = parsed.data.notes;
     if (parsed.data.customerGroup !== undefined) router.customerGroup = parsed.data.customerGroup.trim();
+    if (parsed.data.slaTarget !== undefined) router.slaTarget = parsed.data.slaTarget || undefined;
     router.updatedAt = new Date().toISOString();
     store.save(router);
     audit.log(who(req), "label", router.serialNumber, router.label);
@@ -1149,6 +1152,7 @@ export function buildApp(deps: AppDeps): Express {
           outages: outByserial.get(r.serialNumber) ?? [],
           maintenance: maint,
         });
+        const target = r.slaTarget && r.slaTarget > 0 ? r.slaTarget : null;
         return {
           serialNumber: r.serialNumber,
           label: r.label || r.identity || r.serialNumber,
@@ -1159,6 +1163,9 @@ export function buildApp(deps: AppDeps): Express {
           effectiveMs: sla.effectiveMs,
           outages: sla.outages,
           longestMs: sla.longestMs,
+          slaTarget: target,
+          // null = no target set, true = meets it, false = breached
+          meetsTarget: target === null ? null : sla.uptimePct + 1e-9 >= target,
         };
       });
 
@@ -1170,6 +1177,8 @@ export function buildApp(deps: AppDeps): Express {
         uptimePct: eff > 0 ? Math.max(0, (1 - down / eff) * 100) : 100,
         downMs: down,
         outages: rows.reduce((a, d) => a + d.outages, 0),
+        withTarget: rows.filter((d) => d.slaTarget !== null).length,
+        breaching: rows.filter((d) => d.meetsTarget === false).length,
       };
     };
     const byCustomer = new Map<string, typeof devices>();

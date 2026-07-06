@@ -356,6 +356,11 @@ report. Pick a range (7d / 30d / 90d presets or custom dates) and Generate:
 - **Export CSV** for a spreadsheet, or **Print / PDF** for a clean customer
   hand-out (the browser print dialog).
 
+Each router can carry an **SLA target** (set it in the device details — none /
+99% / 99.5% / 99.9% / 99.95% / 99.99%). The report shows each device's target
+and a **✓ met / ✗ breached** status against its actual uptime, and the summary
+counts how many devices are breaching their commitment.
+
 Uptime is computed from a durable **outage log** (`outagesPath`,
 `data/outages.json`) that the liveness monitor writes to — it opens an outage
 when a device goes offline and closes it on recovery, so downtime survives

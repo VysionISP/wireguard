@@ -34,6 +34,8 @@ export interface RouterRecord {
   label?: string;
   /** Customer group this device belongs to (for grouping + topology maps). */
   customerGroup?: string;
+  /** Committed uptime target in percent (e.g. 99.9). 0/undefined = none. */
+  slaTarget?: number;
   /** Operator notes. Absent on old records. */
   notes?: string;
   /** Last online/offline verdict from the monitor; undefined until first tick. */
