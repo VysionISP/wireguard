@@ -314,6 +314,30 @@ topology; the customer's contact details show above the map:
 - Each link shows **live throughput** streamed from the group's devices
   (`GET /api/groups/:name/stream`), so you can watch traffic move across the
   customer's network in real time. Links carrying traffic highlight.
+- **⟲ Discover links** builds the map for you: it reads each device's
+  MikroTik neighbor table (`/ip/neighbor` — MNDP/LLDP) and creates a link for
+  every pair of managed devices that see each other, with the correct port on
+  each end (each side's own port name wins over the remote's advertisement).
+  Existing manual links are kept and counted as confirmed; neighbors that
+  aren't managed devices (upstream carrier gear, random APs) are reported but
+  not drawn. Devices still on the factory "MikroTik" identity are skipped as
+  ambiguous — set identities first (provisioning's `identityPrefix` does this).
+
+## Customer status pages
+
+Give a customer a **read-only public status page**: Settings → Customers →
+**Status page** generates an unguessable link
+(`https://…/status/st-…`) you can send them. It shows — labels only, no
+serials, IPs or credentials —
+
+- an overall banner (operational / partially degraded / service disruption),
+- each of their devices with live up/degraded/down state,
+- current incidents in customer-friendly words ("Device offline", "Link
+  issue"), a planned-maintenance notice when a window is active,
+- and their last-30-days uptime % (maintenance excluded).
+
+The page refreshes itself every 30 s. Clicking **Status page** again rotates
+the token (killing the old link); **Disable** shuts the page off entirely.
 
 Layouts and links are stored per group in `topologyPath`
 (`data/topology.json`). Removing a router also drops it from any map.
@@ -500,6 +524,9 @@ require the admin role.
 | `GET /api/routers/:ref/profile` | tech | Live profile: DHCP leases, IP addresses, health, firmware |
 | `GET /api/routers/:ref/traffic?hours=` | tech | Traffic history + previous-period comparison from stored metrics |
 | `GET /api/reports/sla?from&to` | tech | Uptime/SLA per device, customer and fleet (maintenance-excluded) |
+| `POST /api/groups/:name/discover` | admin | Auto-discover map links from MikroTik neighbor tables |
+| `POST/DELETE /api/customers/:name/status-token` | admin | Enable/rotate / disable a customer's public status page |
+| `GET /status/:token` + `/api/status/:token` | public (token) | Read-only customer status page + its JSON |
 | `GET/POST /api/maintenance` | tech / admin | List / schedule maintenance windows |
 | `DELETE /api/maintenance/:id` | admin | Cancel a maintenance window |
 | `POST /api/routers/:ref/ping` | tech | One-off ping test from the router to a LAN address |

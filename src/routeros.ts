@@ -108,6 +108,48 @@ export async function fetchLog(
   }));
 }
 
+export interface NeighborEntry {
+  /** Local interface(s) the neighbor was seen on ("bridge,ether2"). */
+  interface: string;
+  /** Remote device identity (MNDP/LLDP system name). */
+  identity: string;
+  /** Remote device's interface name, when advertised. */
+  interfaceName: string;
+  macAddress: string;
+  address: string;
+  board: string;
+}
+
+export type FetchNeighborsFn = typeof fetchNeighbors;
+
+/**
+ * MikroTik neighbor discovery (/ip/neighbor — MNDP/LLDP/CDP). This is what
+ * lets the topology map draw itself: each RouterOS device advertises its
+ * identity + port to directly-connected neighbors.
+ */
+export async function fetchNeighbors(
+  tunnelIp: string,
+  username: string,
+  password: string,
+  timeoutMs = 8000,
+): Promise<NeighborEntry[]> {
+  const auth = Buffer.from(`${username}:${password}`).toString("base64");
+  const res = await fetch(`http://${tunnelIp}/rest/ip/neighbor`, {
+    headers: { authorization: `Basic ${auth}` },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`RouterOS REST /ip/neighbor: ${res.status}`);
+  const raw = (await res.json()) as Array<Record<string, string>>;
+  return raw.map((n) => ({
+    interface: n.interface ?? "",
+    identity: n.identity ?? "",
+    interfaceName: n["interface-name"] ?? "",
+    macAddress: n["mac-address"] ?? "",
+    address: n.address ?? n.address4 ?? "",
+    board: n.board ?? "",
+  }));
+}
+
 export interface PingResult {
   sent: number;
   received: number;

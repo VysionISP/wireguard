@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -11,6 +12,8 @@ export interface Customer {
   notes: string;
   createdAt: string;
   updatedAt: string;
+  /** Secret slug for the public read-only status page; absent = disabled. */
+  statusToken?: string;
 }
 
 export type CustomerFields = Partial<Omit<Customer, "name" | "createdAt" | "updatedAt">>;
@@ -62,10 +65,30 @@ export class CustomerStore {
       notes: fields.notes ?? existing?.notes ?? "",
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      statusToken: existing?.statusToken,
     };
     this.customers.set(name, c);
     this.persist();
     return c;
+  }
+
+  /** Set (or clear, with undefined) a customer's public status-page token. */
+  setStatusToken(name: string, token: string | undefined): boolean {
+    const c = this.customers.get(name);
+    if (!c) return false;
+    c.statusToken = token;
+    c.updatedAt = new Date().toISOString();
+    this.persist();
+    return true;
+  }
+
+  /** Find the customer owning a status token (constant-time compare). */
+  byStatusToken(candidate: string): Customer | undefined {
+    if (!candidate) return undefined;
+    const hc = crypto.createHash("sha256").update(candidate).digest();
+    return [...this.customers.values()].find(
+      (c) => c.statusToken && crypto.timingSafeEqual(hc, crypto.createHash("sha256").update(c.statusToken).digest()),
+    );
   }
 
   delete(name: string): boolean {

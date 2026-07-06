@@ -22,7 +22,8 @@ import { telegram as realTelegram, type TelegramClient } from "./telegram.js";
 import { interfaceRates, type Sample } from "./stream.js";
 import { TopologyStore, type GroupTopology } from "./topology.js";
 import { CustomerStore } from "./customers.js";
-import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, fetchPing, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn, type FetchPingFn } from "./routeros.js";
+import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, fetchPing, fetchNeighbors, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn, type FetchPingFn, type FetchNeighborsFn, type NeighborEntry } from "./routeros.js";
+import { discoverLinks } from "./discovery.js";
 import { MetricsStore, computeTraffic } from "./metrics.js";
 import { HostStore } from "./hosts.js";
 import { MaintenanceStore, MAINT_CATEGORIES, maintCategory, type MaintCategory } from "./maintenance.js";
@@ -41,6 +42,7 @@ export interface AppDeps {
   fetchIfaces?: FetchIfacesFn;
   fetchProfile?: FetchProfileFn;
   fetchPing?: FetchPingFn;
+  fetchNeighbors?: FetchNeighborsFn;
   metrics?: MetricsStore;
   hosts?: HostStore;
   maintenance?: MaintenanceStore;
@@ -70,6 +72,7 @@ interface AuthedRequest extends Request {
 // Works from both src/ (tsx dev) and dist/ (build) — web/ sits beside them.
 const WEB_INDEX = fileURLToPath(new URL("../web/index.html", import.meta.url));
 const WEB_NOC = fileURLToPath(new URL("../web/noc.html", import.meta.url));
+const WEB_STATUS = fileURLToPath(new URL("../web/status.html", import.meta.url));
 
 const registerSchema = z.object({
   token: z.string(),
@@ -126,6 +129,7 @@ export function buildApp(deps: AppDeps): Express {
   const fetchIfaces = deps.fetchIfaces ?? realFetchInterfaces;
   const fetchProfile = deps.fetchProfile ?? fetchDeviceProfile;
   const fetchPingFn = deps.fetchPing ?? fetchPing;
+  const fetchNeighborsFn = deps.fetchNeighbors ?? fetchNeighbors;
   const metrics =
     deps.metrics ?? new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
   const hosts = deps.hosts ?? new HostStore(config.hostsPath);
@@ -1476,6 +1480,7 @@ export function buildApp(deps: AppDeps): Express {
         address: rec?.address ?? "",
         notes: rec?.notes ?? "",
         hasRecord: Boolean(rec),
+        hasStatusPage: Boolean(rec?.statusToken),
       };
     });
     res.json(out.sort((a, b) => a.name.localeCompare(b.name)));
@@ -1521,6 +1526,81 @@ export function buildApp(deps: AppDeps): Express {
     }
     audit.log(who(req), "customer.delete", name, `${unassigned} device(s) unassigned`);
     res.json({ ok: true });
+  });
+
+  // ---- public status page (tokenized, read-only) ------------------------
+  // Enable / rotate a customer's status-page link. Rotating invalidates the
+  // old URL, so a leaked link is one click to kill.
+  app.post("/api/customers/:name/status-token", requireAdmin, (req: Request, res: Response) => {
+    const name = req.params.name;
+    if (!customers.has(name)) customers.upsert(name, {});
+    const token = "st-" + crypto.randomBytes(12).toString("hex");
+    customers.setStatusToken(name, token);
+    audit.log(who(req), "customer.statuspage", name, "enabled/rotated");
+    res.json({ ok: true, token, url: `${config.server.publicUrl.replace(/\/$/, "")}/status/${token}` });
+  });
+  app.delete("/api/customers/:name/status-token", requireAdmin, (req: Request, res: Response) => {
+    if (!customers.setStatusToken(req.params.name, undefined)) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    audit.log(who(req), "customer.statuspage", req.params.name, "disabled");
+    res.json({ ok: true });
+  });
+
+  // The data behind the public page. No session auth — the unguessable token
+  // IS the credential. Read-only, and deliberately sparse: labels and states
+  // only, no serials, no IPs, no internal messages.
+  app.get("/api/status/:token", (req: Request, res: Response) => {
+    const customer = customers.byStatusToken(req.params.token);
+    if (!customer) {
+      res.status(404).json({ error: "unknown status page" });
+      return;
+    }
+    const routers = groupRouters(customer.name).filter((r) => r.state !== "staged" && r.state !== "revoked");
+    const now = Date.now();
+    const from = now - 30 * 24 * 3600_000;
+    const outByserial = new Map<string, Span[]>();
+    for (const o of outages.list()) {
+      const arr = outByserial.get(o.serialNumber) ?? outByserial.set(o.serialNumber, []).get(o.serialNumber)!;
+      arr.push({ start: Date.parse(o.startAt), end: o.endAt ? Date.parse(o.endAt) : now });
+    }
+    let down = 0;
+    let eff = 0;
+    const devices = routers.map((r) => {
+      const maint = maintenance
+        .windowsCovering(r.serialNumber, r.customerGroup, "offline")
+        .map((w) => ({ start: Date.parse(w.startsAt), end: Date.parse(w.endsAt) }));
+      const sla = computeSla({ createdAt: Date.parse(r.createdAt), from, to: now, outages: outByserial.get(r.serialNumber) ?? [], maintenance: maint });
+      down += sla.downMs;
+      eff += sla.effectiveMs;
+      const state =
+        r.health === "warning" ? "degraded" : (r.health ? r.health !== "offline" : r.lastOnline !== false) ? "up" : "down";
+      const upSince = [...(r.transitions ?? [])].reverse().find((t) => t.online)?.at ?? null;
+      return { label: r.label || r.identity || r.serialNumber, state, upSince: state === "up" ? upSince : null };
+    });
+    const serials = new Set(routers.map((r) => r.serialNumber));
+    const incidents = issues
+      .list(false)
+      .filter((i) => serials.has(i.serialNumber) && i.type !== "login")
+      .map((i) => ({ label: i.label, type: i.type, since: i.openedAt }));
+    const maint = maintenance
+      .active()
+      .filter((w) => w.scopeKind === "all" || (w.scopeKind === "customer" && w.scopeValue === customer.name) || (w.scopeKind === "device" && routers.some((r) => r.serialNumber === w.scopeValue)))
+      .map((w) => ({ note: w.note, endsAt: w.endsAt }));
+    res.json({
+      customer: customer.name,
+      at: new Date(now).toISOString(),
+      overall: incidents.length === 0 && devices.every((d) => d.state === "up") ? "operational" : devices.some((d) => d.state === "down") ? "outage" : "degraded",
+      devices,
+      incidents,
+      maintenance: maint,
+      uptime30d: eff > 0 ? Math.max(0, (1 - down / eff) * 100) : 100,
+    });
+  });
+
+  app.get("/status/:token", (_req: Request, res: Response) => {
+    res.sendFile(WEB_STATUS);
   });
 
   app.get("/api/groups/:name", requireTech, async (req: Request, res: Response) => {
@@ -1572,6 +1652,43 @@ export function buildApp(deps: AppDeps): Express {
     const saved = topology.set(name, parsed.data as GroupTopology, validIds);
     audit.log(who(req), "topology", name, `${saved.links.length} link(s)`);
     res.json({ ok: true, topology: saved });
+  });
+
+  // Auto-discover links between the group's devices from MikroTik neighbor
+  // discovery (MNDP/LLDP): each device's /ip/neighbor table names the identity
+  // + port of whatever is plugged into it. Manual links are kept as-is.
+  app.post("/api/groups/:name/discover", requireAdmin, async (req: Request, res: Response) => {
+    const name = req.params.name;
+    const routers = groupRouters(name).filter((r) => r.state !== "staged" && r.state !== "revoked" && r.tunnelIp);
+    if (routers.length === 0) {
+      res.status(400).json({ error: "no active devices in this customer" });
+      return;
+    }
+    const neighborsById = new Map<string, NeighborEntry[]>();
+    let polled = 0;
+    const CONCURRENCY = 5;
+    for (let i = 0; i < routers.length; i += CONCURRENCY) {
+      await Promise.all(
+        routers.slice(i, i + CONCURRENCY).map(async (r) => {
+          try {
+            neighborsById.set(r.id, await fetchNeighborsFn(r.tunnelIp, r.username, r.password));
+            polled++;
+          } catch {
+            // unreachable device — its links can still be found from the other end
+          }
+        }),
+      );
+    }
+    const current = topology.get(name);
+    const result = discoverLinks(
+      routers.map((r) => ({ id: r.id, identity: r.identity, label: r.label || r.identity || r.serialNumber })),
+      neighborsById,
+      current.links,
+    );
+    const validIds = new Set(routers.map((r) => r.id));
+    const saved = topology.set(name, { nodes: current.nodes, links: result.links }, validIds);
+    audit.log(who(req), "topology.discover", name, `${result.added} added, ${result.confirmed} confirmed`);
+    res.json({ ok: true, polled, added: result.added, confirmed: result.confirmed, unmatched: result.unmatched, topology: saved });
   });
 
   // Live per-interface throughput for every device in a group — feeds the map.

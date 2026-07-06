@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Service status</title>
+<style>
+  :root {
+    --bg: #05080b; --panel: #0b1017; --border: #16222e; --text: #e8eef4;
+    --muted: #6b7c8c; --accent: #21b8ad; --ok: #33d17a; --warn: #ffb020; --crit: #ff4d55;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: radial-gradient(120% 90% at 50% -10%, #0a1420, var(--bg)) fixed; color: var(--text); font-family: var(--mono); min-height: 100vh; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 40px 18px 60px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 22px; flex-wrap: wrap; }
+  .brand { font-size: 18px; font-weight: 700; letter-spacing: .16em; }
+  .brand span { color: var(--accent); }
+  #cust { color: var(--muted); font-size: 14px; }
+  .banner { border-radius: 8px; padding: 18px 22px; font-size: 19px; font-weight: 700; letter-spacing: .08em; margin-bottom: 18px; border: 1px solid var(--border); }
+  .banner.operational { background: #0c2418; color: var(--ok); border-color: #14442c; }
+  .banner.degraded { background: #2a2208; color: var(--warn); border-color: #4a3a10; }
+  .banner.outage { background: #300d10; color: var(--crit); border-color: #5a1a1e; }
+  .maint { background: #0a1620; border: 1px solid #14303a; color: var(--accent); border-radius: 6px; padding: 10px 16px; font-size: 13px; margin-bottom: 18px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 18px; overflow: hidden; }
+  .panel h2 { margin: 0; padding: 12px 18px; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid #0d151d; font-size: 14px; }
+  .row:last-child { border-bottom: none; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+  .dot.up { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .dot.degraded { background: var(--warn); box-shadow: 0 0 8px var(--warn); animation: pulse 1.2s infinite; }
+  .dot.down { background: var(--crit); box-shadow: 0 0 8px var(--crit); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .state { color: var(--muted); font-size: 12.5px; }
+  .up .state { color: var(--ok); } .stat-degraded { color: var(--warn); } .stat-down { color: var(--crit); }
+  .uptime { display: flex; gap: 20px; padding: 16px 18px; align-items: baseline; }
+  .uptime .big { font-size: 30px; font-weight: 700; }
+  .uptime .k { color: var(--muted); font-size: 12px; }
+  footer { color: var(--muted); font-size: 11.5px; text-align: center; margin-top: 8px; }
+  #err { color: var(--crit); text-align: center; padding: 60px 0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><div class="brand">KORVIX <span>STATUS</span></div><div id="cust"></div></header>
+  <div id="err" class="hidden">This status page is unavailable.</div>
+  <div id="main" class="hidden">
+    <div id="banner" class="banner operational">—</div>
+    <div id="maint" class="maint hidden"></div>
+    <div class="panel"><h2>Services</h2><div id="devices"></div></div>
+    <div class="panel hidden" id="incPanel"><h2>Current incidents</h2><div id="incidents"></div></div>
+    <div class="panel"><h2>Last 30 days</h2><div class="uptime"><div class="big" id="uptime">—</div><div class="k">uptime, planned maintenance excluded</div></div></div>
+    <footer id="updated"></footer>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const token = location.pathname.split("/").pop();
+function since(iso) {
+  const d = (Date.now() - Date.parse(iso)) / 1000;
+  if (d < 3600) return Math.floor(d / 60) + "m";
+  if (d < 86400) return Math.floor(d / 3600) + "h";
+  return Math.floor(d / 86400) + "d";
+}
+const BANNER = { operational: "● ALL SYSTEMS OPERATIONAL", degraded: "● PARTIALLY DEGRADED", outage: "● SERVICE DISRUPTION" };
+const INC = { offline: "Device offline", "link-down": "Link issue", "host-down": "Equipment offline", "traffic-high": "High utilisation", "traffic-low": "Low throughput", "monitor-error": "Monitoring issue" };
+async function load() {
+  let r;
+  try {
+    const res = await fetch("/api/status/" + encodeURIComponent(token));
+    if (!res.ok) throw new Error();
+    r = await res.json();
+  } catch { $("err").classList.remove("hidden"); $("main").classList.add("hidden"); return; }
+  $("err").classList.add("hidden"); $("main").classList.remove("hidden");
+  $("cust").textContent = r.customer;
+  document.title = r.customer + " — service status";
+  const b = $("banner");
+  b.className = "banner " + r.overall;
+  b.textContent = BANNER[r.overall] || r.overall;
+  const m = $("maint");
+  if (r.maintenance && r.maintenance.length) {
+    m.classList.remove("hidden");
+    m.textContent = "🔧 Planned maintenance in progress" + (r.maintenance[0].note ? " — " + r.maintenance[0].note : "");
+  } else m.classList.add("hidden");
+  $("devices").innerHTML = (r.devices || []).map((d) => `
+    <div class="row ${d.state}"><span class="dot ${esc(d.state)}"></span>
+      <span class="name">${esc(d.label)}</span>
+      <span class="state stat-${esc(d.state)}">${d.state === "up" ? (d.upSince ? "up · " + since(d.upSince) : "operational") : d.state}</span></div>`).join("")
+    || '<div class="row"><span class="name" style="color:var(--muted)">No services listed.</span></div>';
+  $("incPanel").classList.toggle("hidden", !(r.incidents || []).length);
+  $("incidents").innerHTML = (r.incidents || []).map((i) => `
+    <div class="row"><span class="dot down"></span><span class="name">${esc(i.label)}</span>
+      <span class="state stat-down">${esc(INC[i.type] || i.type)} · ${since(i.since)}</span></div>`).join("");
+  $("uptime").textContent = r.uptime30d.toFixed(r.uptime30d >= 99.99 ? 3 : 2) + "%";
+  $("uptime").style.color = r.uptime30d >= 99.9 ? "var(--ok)" : r.uptime30d >= 99 ? "var(--warn)" : "var(--crit)";
+  $("updated").textContent = "Updated " + new Date(r.at).toLocaleTimeString() + " · refreshes automatically";
+}
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

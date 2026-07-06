@@ -461,6 +461,7 @@
         <span class="gap"></span>
         <button id="mapAddDevice" class="adminOnly">Add device</button>
         <button id="mapAddLink" class="adminOnly">Add link</button>
+        <button id="mapDiscover" class="adminOnly" title="Auto-discover links from MikroTik neighbor discovery (MNDP/LLDP)">⟲ Discover links</button>
         <button id="mapSave" class="primary adminOnly">Save layout</button>
       </div>
       <div class="pad chips" id="custDetails" style="display:none"></div>
@@ -951,9 +952,21 @@ async function loadCustomers() {
     <td class="actions">
       <button data-custadd="${esc(c.name)}">Add device</button>
       <button data-custedit="${esc(c.name)}">Edit</button>
+      <button data-custpage="${esc(c.name)}">${c.hasStatusPage ? "Status page ✓" : "Status page"}</button>
       <button class="danger" data-custdel="${esc(c.name)}">Delete</button>
     </td></tr>`).join("");
   window._customers = list;
+}
+async function customerStatusPage(name) {
+  const r = await api("/api/customers/" + encodeURIComponent(name) + "/status-token", { method: "POST" });
+  $("mTitle").textContent = "Status page — " + name;
+  $("mBody").innerHTML = `
+    <p>Share this read-only link with <b>${esc(name)}</b>. It shows their devices up/down, current incidents and 30-day uptime — no login needed, the secret URL is the access.</p>
+    <div class="cred"><div class="row"><span>link</span><code class="mono" style="word-break:break-all">${esc(r.url)}</code>
+      <button data-copy="${esc(r.url)}">Copy</button></div></div>
+    <p class="chips">Generating again rotates the token and kills the old link. <button class="danger" data-custpagedel="${esc(name)}" style="margin-left:8px">Disable status page</button></p>`;
+  $("modal").showModal();
+  loadCustomers();
 }
 function clearCustForm() {
   for (const id of ["cName", "cContact", "cPhone", "cEmail", "cAddress", "cNotes"]) $(id).value = "";
@@ -1101,6 +1114,20 @@ async function loadGroup(name) {
   renderCustomerHeader(name);
   renderMap();
   startMapStream(name);
+}
+async function discoverMapLinks() {
+  if (!mapState.group) return toast("Select a customer first");
+  const btn = $("mapDiscover");
+  btn.disabled = true; btn.textContent = "Discovering…";
+  try {
+    const r = await api("/api/groups/" + encodeURIComponent(mapState.group) + "/discover", { method: "POST" });
+    toast(`Discovery: ${r.added} new link(s), ${r.confirmed} already mapped (${r.polled} device(s) polled)`);
+    if (r.unmatched && r.unmatched.length) {
+      console.log("unmatched neighbors:", r.unmatched);
+    }
+    await loadGroup(mapState.group);
+  } catch (e) { toast(e.message); }
+  finally { btn.disabled = false; btn.textContent = "⟲ Discover links"; }
 }
 async function addDeviceToCustomer(customerName) {
   const target = customerName || mapState.group;
@@ -2436,6 +2463,8 @@ document.addEventListener("click", async (ev) => {
   if (d.usreset != null) { return resetUserPassword(d.usreset); }
   if (d.custadd != null) { return addDeviceToCustomer(d.custadd).catch((e) => toast(e.message)); }
   if (d.custedit != null) { return editCustomer(d.custedit); }
+  if (d.custpage != null) { return customerStatusPage(d.custpage).catch((e) => toast(e.message)); }
+  if (d.custpagedel != null) { if (confirm("Disable this customer's status page? The link stops working immediately.")) { await api("/api/customers/" + encodeURIComponent(d.custpagedel) + "/status-token", { method: "DELETE" }).catch((e) => toast(e.message)); $("modal").close(); toast("Status page disabled"); loadCustomers(); } return; }
   if (d.custdel != null) { if (confirm(`Delete customer "${d.custdel}"? Devices are unassigned and its map is cleared.`)) { await api("/api/customers/" + encodeURIComponent(d.custdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadCustomers(); } return; }
   if (d.adddev != null) {
     const target = d.addto || mapState.group;
@@ -2582,6 +2611,7 @@ $("search").addEventListener("input", render);
 $("mapGroup").addEventListener("change", (e) => loadGroup(e.target.value).catch((err) => toast(err.message)));
 $("mapAddDevice").addEventListener("click", () => addDeviceToCustomer().catch((e) => toast(e.message)));
 $("mapAddLink").addEventListener("click", startAddLink);
+$("mapDiscover").addEventListener("click", discoverMapLinks);
 $("mapSave").addEventListener("click", saveMap);
 $("mapLinks").addEventListener("click", (e) => {
   const t = e.target.closest("[data-lnk]");
