@@ -22,7 +22,7 @@ import { telegram as realTelegram, type TelegramClient } from "./telegram.js";
 import { interfaceRates, type Sample } from "./stream.js";
 import { TopologyStore, type GroupTopology } from "./topology.js";
 import { CustomerStore } from "./customers.js";
-import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn } from "./routeros.js";
+import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, fetchPing, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn, type FetchPingFn } from "./routeros.js";
 import { MetricsStore, computeTraffic } from "./metrics.js";
 import { HostStore } from "./hosts.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
@@ -37,6 +37,7 @@ export interface AppDeps {
   fetchLive?: FetchLiveFn;
   fetchIfaces?: FetchIfacesFn;
   fetchProfile?: FetchProfileFn;
+  fetchPing?: FetchPingFn;
   metrics?: MetricsStore;
   hosts?: HostStore;
   backups?: BackupStore;
@@ -115,6 +116,7 @@ export function buildApp(deps: AppDeps): Express {
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
   const fetchIfaces = deps.fetchIfaces ?? realFetchInterfaces;
   const fetchProfile = deps.fetchProfile ?? fetchDeviceProfile;
+  const fetchPingFn = deps.fetchPing ?? fetchPing;
   const metrics =
     deps.metrics ?? new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
   const hosts = deps.hosts ?? new HostStore(config.hostsPath);
@@ -1057,6 +1059,31 @@ export function buildApp(deps: AppDeps): Express {
       busiest,
       samples: curr.length,
     });
+  });
+
+  // ---- one-off ping test: ask the router to ping any address on its LAN
+  app.post("/api/routers/:ref/ping", requireTech, async (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    if (router.state === "staged" || router.state === "revoked") {
+      res.status(400).json({ error: "router is not online" });
+      return;
+    }
+    const address = String((req.body ?? {}).address ?? "").trim();
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(address)) {
+      res.status(400).json({ error: "address must be an IPv4 address" });
+      return;
+    }
+    const count = Math.min(10, Math.max(1, Number((req.body ?? {}).count) || 4));
+    try {
+      const r = await fetchPingFn(router.tunnelIp, router.username, router.password, address, count, (count + 4) * 1000);
+      res.json({ address, ...r, lossPct: r.sent ? Math.round(((r.sent - r.received) / r.sent) * 100) : 100 });
+    } catch (err) {
+      res.status(502).json({ error: `ping failed: ${(err as Error).message}` });
+    }
   });
 
   // ---- monitored internal hosts (ping targets behind a router) ----------

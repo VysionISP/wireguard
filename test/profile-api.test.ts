@@ -33,7 +33,10 @@ beforeEach(() => {
   cfg = testConfig();
   store = new RouterStore(cfg.storePath);
   metrics = new MetricsStore(path.join(tempDir(), "m.jsonl"));
-  app = buildApp({ config: cfg, store, wg: new DryRunManager("wg0", true), metrics, fetchProfile });
+  app = buildApp({
+    config: cfg, store, wg: new DryRunManager("wg0", true), metrics, fetchProfile,
+    fetchPing: async (_h, _u, _p, address) => ({ sent: 4, received: address === "192.168.88.10" ? 4 : 0, avgMs: 1.5 }),
+  });
 });
 
 function register(serial: string, key: number) {
@@ -55,6 +58,29 @@ describe("GET /api/routers/:ref/profile", () => {
     await register("HEX1", 1);
     const res = await request(app).get("/api/routers/HEX1/profile");
     expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /api/routers/:ref/ping", () => {
+  it("returns replies/loss for a reachable address", async () => {
+    await register("HEX1", 1);
+    const res = await request(app).post("/api/routers/HEX1/ping").set("authorization", A()).send({ address: "192.168.88.10" });
+    expect(res.status).toBe(200);
+    expect(res.body.received).toBe(4);
+    expect(res.body.lossPct).toBe(0);
+  });
+
+  it("reports 100% loss for an unreachable address", async () => {
+    await register("HEX1", 1);
+    const res = await request(app).post("/api/routers/HEX1/ping").set("authorization", A()).send({ address: "10.0.0.254" });
+    expect(res.body.received).toBe(0);
+    expect(res.body.lossPct).toBe(100);
+  });
+
+  it("rejects a non-IPv4 address", async () => {
+    await register("HEX1", 1);
+    const res = await request(app).post("/api/routers/HEX1/ping").set("authorization", A()).send({ address: "not-an-ip" });
+    expect(res.status).toBe(400);
   });
 });
 

@@ -353,6 +353,8 @@
   .pcnum input { width: 92px; background: var(--bg); border: 1px solid var(--border2); color: var(--text); border-radius: 3px; padding: 5px 8px; font: inherit; font-size: 13px; }
   .pcnum select { background: var(--bg); border: 1px solid var(--border2); color: var(--text); border-radius: 3px; padding: 5px 6px; font: inherit; font-size: 12px; }
   .pcbtns { display: flex; gap: 10px; margin-top: 12px; }
+  .pingrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+  .pingrow input { background: var(--bg); border: 1px solid var(--border2); color: var(--text); border-radius: 3px; padding: 6px 9px; font: inherit; font-size: 13px; }
   .port:not(.disabled):hover .jack { border-color: var(--accent-dim); }
   .plegend { display: flex; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
   .plegend span { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
@@ -1741,6 +1743,28 @@ async function removeMonitoredHost(id) {
   try { await api("/api/hosts/" + encodeURIComponent(id), { method: "DELETE" }); toast("Stopped monitoring"); await reloadProfileHosts(); }
   catch (e) { toast(e.message); }
 }
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+async function doPingTest() {
+  const addr = ($("pingAddr").value || "").trim();
+  if (!IPV4.test(addr)) return toast("Enter a valid IPv4 address");
+  const out = $("pingOut");
+  out.innerHTML = `Pinging ${esc(addr)} from the router…`;
+  try {
+    const r = await api("/api/routers/" + encodeURIComponent(profileState.ref) + "/ping", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address: addr, count: 4 }),
+    });
+    out.innerHTML = r.received > 0
+      ? `<span class="dot on"></span><b class="mono">${esc(addr)}</b> — ${r.received}/${r.sent} replies · ${r.lossPct}% loss${r.avgMs != null ? ` · avg ${r.avgMs.toFixed(1)} ms` : ""}`
+      : `<span class="dot off"></span><b class="mono">${esc(addr)}</b> — no reply (${r.sent} sent, 100% loss)`;
+  } catch (e) { out.innerHTML = `<span class="dot off"></span>${esc(e.message)}`; }
+}
+function monitorStatic() {
+  const addr = ($("pingAddr").value || "").trim();
+  const name = ($("pingName").value || "").trim();
+  if (!IPV4.test(addr)) return toast("Enter a valid IPv4 address");
+  return addMonitoredHost(addr, name, "");
+}
 
 function renderProfileShell(prof) {
   const r = prof.resource;
@@ -1769,6 +1793,15 @@ function renderProfileShell(prof) {
 
     ${health.length ? `<div class="sub">Health</div><div class="signal">
       ${health.map((h) => signalTile(h.name, h.value)).join("")}</div>` : ""}
+
+    <div class="sub">Ping test &amp; static monitor <span class="chips">(the router pings any LAN address)</span></div>
+    <div class="pingrow">
+      <input id="pingAddr" placeholder="192.168.88.1" style="width:150px">
+      <input id="pingName" placeholder="name (optional)" style="width:150px">
+      <button id="pingTestBtn">Ping test</button>
+      <button class="primary" id="pingMonBtn">＋ Monitor</button>
+    </div>
+    <div id="pingOut" class="chips" style="margin-top:6px"></div>
 
     ${monHosts.length ? `<div class="sub">Monitored internal hosts <span class="chips">(pinged by this router)</span></div>
     <div class="tablewrap"><table><thead><tr><th>State</th><th>Address</th><th>Name</th><th>RTT</th><th>Last reply</th><th></th></tr></thead>
@@ -2144,6 +2177,8 @@ document.addEventListener("click", async (ev) => {
   if (link) { ev.preventDefault(); return downloadBackup(link.dataset.ref, link.dataset.serial, link.dataset.dl).catch((e) => toast(e.message)); }
   const btn = ev.target.closest("button");
   if (!btn) return;
+  if (btn.id === "pingTestBtn") return doPingTest();
+  if (btn.id === "pingMonBtn") return monitorStatic();
   if (btn.id === "pcSave") return savePortCfg(btn.dataset.port);
   if (btn.id === "pcRemove") { portState.rules.delete(btn.dataset.port); $("portcfg").close(); renderPortMap(portState.ifaces || []); return toast("Port no longer monitored — click Save monitoring to apply"); }
   const d = btn.dataset;

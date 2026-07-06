@@ -352,13 +352,18 @@ anything on its LAN — even though they aren't routable from the provisioning
 server. The router does the pinging on our behalf.
 
 On a device's **Profile**, each DHCP lease has a **＋ Monitor** button; click it
-to start watching that client. Monitored hosts appear in a "Monitored internal
-hosts" table with live state and round-trip time, and move through the same
-**up → warning → offline** states (`hosts.warnAfterSeconds` / `offlineAfterSeconds`,
-pinged every `hosts.intervalSeconds`). Going offline opens a `host-down` issue —
-so it shows on the status board and NOC — and fires an alert; recovery clears
-it. A host is never blamed while its own router is offline. Monitored hosts live
-in `hostsPath` (`data/hosts.json`) and are removed with the device.
+to start watching that client. There's also a **Ping test & static monitor**
+tool: type any LAN address, hit **Ping test** for a one-off result (replies,
+loss %, average RTT), or **＋ Monitor** to watch a fixed IP that isn't in the
+DHCP table (a statically-addressed camera, PLC, switch…).
+
+Monitored hosts appear in a "Monitored internal hosts" table with live state and
+round-trip time, and move through the same **up → warning → offline** states
+(`hosts.warnAfterSeconds` / `offlineAfterSeconds`, pinged every
+`hosts.intervalSeconds`). Going offline opens a `host-down` issue — so it shows
+on the status board **and the NOC wallboard** — and fires an alert; recovery
+clears it. A host is never blamed while its own router is offline. Monitored
+hosts live in `hostsPath` (`data/hosts.json`) and are removed with the device.
 
 ## Labels & notes
 
@@ -432,6 +437,7 @@ require the admin role.
 | `GET /api/routers/:ref/live` | tech | Live stats over the tunnel (system, interfaces, LTE) |
 | `GET /api/routers/:ref/profile` | tech | Live profile: DHCP leases, IP addresses, health, firmware |
 | `GET /api/routers/:ref/traffic?hours=` | tech | Traffic history + previous-period comparison from stored metrics |
+| `POST /api/routers/:ref/ping` | tech | One-off ping test from the router to a LAN address |
 | `GET/POST /api/routers/:ref/hosts` | tech | List / add monitored internal ping targets |
 | `PATCH/DELETE /api/hosts/:id` | tech | Toggle/rename / remove a monitored host |
 | `PATCH /api/routers/:ref` | tech | Set `label` / `notes` |
