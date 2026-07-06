@@ -26,6 +26,8 @@ import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProf
 import { MetricsStore, computeTraffic } from "./metrics.js";
 import { HostStore } from "./hosts.js";
 import { MaintenanceStore, MAINT_CATEGORIES, maintCategory, type MaintCategory } from "./maintenance.js";
+import { OutageStore } from "./outages.js";
+import { computeSla, type Span } from "./sla.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
 import { defaultMonitoring, effectivePorts, type RouterRecord, type DeviceType } from "./types.js";
 
@@ -42,6 +44,7 @@ export interface AppDeps {
   metrics?: MetricsStore;
   hosts?: HostStore;
   maintenance?: MaintenanceStore;
+  outages?: OutageStore;
   backups?: BackupStore;
   alerter?: Alerter;
   tokens?: TokenStore;
@@ -123,6 +126,7 @@ export function buildApp(deps: AppDeps): Express {
     deps.metrics ?? new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
   const hosts = deps.hosts ?? new HostStore(config.hostsPath);
   const maintenance = deps.maintenance ?? new MaintenanceStore(config.maintenancePath);
+  const outages = deps.outages ?? new OutageStore(config.outagesPath);
 
   // Serialises the register critical section so concurrent phone-homes can't
   // both read the same "lowest free IP" or both burn the same one-time token
@@ -1114,6 +1118,70 @@ export function buildApp(deps: AppDeps): Express {
     }
     audit.log(who(req), "maintenance.remove", req.params.id.slice(0, 8));
     res.json({ ok: true });
+  });
+
+  // ---- SLA / uptime report over a period (excludes planned maintenance)
+  app.get("/api/reports/sla", requireTech, (req: Request, res: Response) => {
+    const now = Date.now();
+    const to = Number(req.query.to) || now;
+    const from = Number(req.query.from) || to - 30 * 24 * 3600_000;
+    if (!(to > from)) {
+      res.status(400).json({ error: "invalid range" });
+      return;
+    }
+    const outByserial = new Map<string, Span[]>();
+    for (const o of outages.list()) {
+      const start = Date.parse(o.startAt);
+      const end = o.endAt ? Date.parse(o.endAt) : now; // open outage runs to now
+      (outByserial.get(o.serialNumber) ?? outByserial.set(o.serialNumber, []).get(o.serialNumber)!).push({ start, end });
+    }
+    const devices = store
+      .list()
+      .filter((r) => r.state !== "staged" && r.state !== "revoked")
+      .map((r) => {
+        const maint = maintenance
+          .windowsCovering(r.serialNumber, r.customerGroup, "offline")
+          .map((w) => ({ start: Date.parse(w.startsAt), end: Date.parse(w.endsAt) }));
+        const sla = computeSla({
+          createdAt: Date.parse(r.createdAt),
+          from,
+          to,
+          outages: outByserial.get(r.serialNumber) ?? [],
+          maintenance: maint,
+        });
+        return {
+          serialNumber: r.serialNumber,
+          label: r.label || r.identity || r.serialNumber,
+          customerGroup: r.customerGroup ?? null,
+          uptimePct: sla.uptimePct,
+          downMs: sla.downMs,
+          excludedMs: sla.excludedMs,
+          effectiveMs: sla.effectiveMs,
+          outages: sla.outages,
+          longestMs: sla.longestMs,
+        };
+      });
+
+    const agg = (rows: typeof devices) => {
+      const down = rows.reduce((a, d) => a + d.downMs, 0);
+      const eff = rows.reduce((a, d) => a + d.effectiveMs, 0);
+      return {
+        devices: rows.length,
+        uptimePct: eff > 0 ? Math.max(0, (1 - down / eff) * 100) : 100,
+        downMs: down,
+        outages: rows.reduce((a, d) => a + d.outages, 0),
+      };
+    };
+    const byCustomer = new Map<string, typeof devices>();
+    for (const d of devices) {
+      const key = d.customerGroup || "— Unassigned";
+      (byCustomer.get(key) ?? byCustomer.set(key, []).get(key)!).push(d);
+    }
+    const customers = [...byCustomer.entries()]
+      .map(([name, rows]) => ({ name, ...agg(rows) }))
+      .sort((a, b) => a.uptimePct - b.uptimePct);
+
+    res.json({ from, to, fleet: agg(devices), customers, devices: devices.sort((a, b) => a.uptimePct - b.uptimePct) });
   });
 
   // ---- one-off ping test: ask the router to ping any address on its LAN

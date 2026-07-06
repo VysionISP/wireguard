@@ -345,6 +345,26 @@ all reflect this three-state health. On the NOC, degraded devices show as amber
 cards alongside the faults, and a **new critical fault plays an alert sound**
 (click the 🔊 button once to satisfy the browser's audio-gesture rule).
 
+## SLA / uptime reports
+
+The **Reports** tab turns the liveness data into a customer-facing uptime
+report. Pick a range (7d / 30d / 90d presets or custom dates) and Generate:
+
+- **Fleet uptime %**, total unplanned downtime and outage count up top.
+- **By customer** and **by device** tables, each with uptime %, downtime,
+  outage count, longest outage and planned-maintenance time.
+- **Export CSV** for a spreadsheet, or **Print / PDF** for a clean customer
+  hand-out (the browser print dialog).
+
+Uptime is computed from a durable **outage log** (`outagesPath`,
+`data/outages.json`) that the liveness monitor writes to — it opens an outage
+when a device goes offline and closes it on recovery, so downtime survives
+restarts and the bounded event feed. **Planned maintenance is excluded**: any
+downtime inside a maintenance window (that covered "offline") is removed from
+both the downtime and the denominator, so a scheduled reboot neither helps nor
+hurts the number. A device is only measured from its registration date
+forward.
+
 ## Maintenance windows
 
 Planned work shouldn't page anyone. Under **Settings → Maintenance** you can
@@ -455,6 +475,7 @@ require the admin role.
 | `GET /api/routers/:ref/live` | tech | Live stats over the tunnel (system, interfaces, LTE) |
 | `GET /api/routers/:ref/profile` | tech | Live profile: DHCP leases, IP addresses, health, firmware |
 | `GET /api/routers/:ref/traffic?hours=` | tech | Traffic history + previous-period comparison from stored metrics |
+| `GET /api/reports/sla?from&to` | tech | Uptime/SLA per device, customer and fleet (maintenance-excluded) |
 | `GET/POST /api/maintenance` | tech / admin | List / schedule maintenance windows |
 | `DELETE /api/maintenance/:id` | admin | Cancel a maintenance window |
 | `POST /api/routers/:ref/ping` | tech | One-off ping test from the router to a LAN address |

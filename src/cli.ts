@@ -14,6 +14,7 @@ import { MetricsStore, startMetricsSampler } from "./metrics.js";
 import { HostStore } from "./hosts.js";
 import { startHostMonitor } from "./hostmonitor.js";
 import { MaintenanceStore, type MaintCategory } from "./maintenance.js";
+import { OutageStore } from "./outages.js";
 import { Alerter } from "./alerts.js";
 import { TokenStore } from "./tokens.js";
 import { UserStore } from "./users.js";
@@ -54,10 +55,11 @@ program
     const metrics = new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
     const hosts = new HostStore(config.hostsPath);
     const maintenance = new MaintenanceStore(config.maintenancePath);
+    const outages = new OutageStore(config.outagesPath);
     // The monitors pass a coarse category ("offline"/"link"/"host"/"login").
     const suppressed = (serial: string, group: string | undefined, category: string) =>
       maintenance.suppressed(serial, group, category as MaintCategory);
-    const app = buildApp({ config, store, wg, alerter, issues, events, settings, metrics, hosts, maintenance });
+    const app = buildApp({ config, store, wg, alerter, issues, events, settings, metrics, hosts, maintenance, outages });
     if (config.liveness.enabled) {
       // Active ping owns online/warning/offline; run the handshake monitor only
       // for handshake-age bookkeeping (no offline issues, to avoid duplicates).
@@ -69,6 +71,7 @@ program
           port: config.liveness.port,
           timeoutMs: config.liveness.timeoutMs,
           suppressed,
+          outages,
         },
         config.liveness.intervalSeconds,
       );

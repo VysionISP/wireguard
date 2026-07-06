@@ -91,4 +91,14 @@ export class MaintenanceStore {
       (w) => this.covers(w, serial, group) && (w.categories.length === 0 || w.categories.includes(category)),
     );
   }
+
+  /**
+   * All windows (past/present/future) that cover this device for `category` —
+   * used by SLA reporting to exclude planned downtime over a period.
+   */
+  windowsCovering(serial: string, group: string | undefined, category: MaintCategory): MaintenanceWindow[] {
+    return this.windows.filter(
+      (w) => this.covers(w, serial, group) && (w.categories.length === 0 || w.categories.includes(category)),
+    );
+  }
 }

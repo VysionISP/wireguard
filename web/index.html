@@ -419,6 +419,7 @@
     <button data-tab="fleet">Fleet</button>
     <button data-tab="map">Map</button>
     <button data-tab="events">Events</button>
+    <button data-tab="reports">Reports</button>
     <button data-tab="bulk" class="adminOnly">Bulk actions</button>
     <button data-tab="settings" class="adminOnly">Settings</button>
     <button data-tab="audit" class="adminOnly">Audit log</button>
@@ -751,6 +752,39 @@
     </div>
   </section>
 
+  <!-- REPORTS -->
+  <section id="tab-reports" class="hidden">
+    <div class="panel">
+      <div class="panelhead"><h2>Uptime / SLA report</h2>
+        <span class="gap" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="linkish" data-slaquick="7">7d</button>
+          <button class="linkish" data-slaquick="30">30d</button>
+          <button class="linkish" data-slaquick="90">90d</button>
+          <input id="slaFrom" type="date" style="background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px">
+          <input id="slaTo" type="date" style="background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px">
+          <button class="primary" id="slaRun">Generate</button>
+          <button id="slaCsv">Export CSV</button>
+          <button id="slaPrint">Print / PDF</button>
+        </span>
+      </div>
+      <div class="pad" id="slaSummary"><span class="chips">Pick a range and hit Generate.</span></div>
+    </div>
+    <div class="panel" id="slaCustPanel" style="display:none">
+      <h2>By customer</h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Customer</th><th>Devices</th><th>Uptime</th><th>Downtime</th><th>Outages</th></tr></thead>
+        <tbody id="slaCustRows"></tbody>
+      </table></div>
+    </div>
+    <div class="panel" id="slaDevPanel" style="display:none">
+      <h2>By device</h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Device</th><th>Customer</th><th>Uptime</th><th>Downtime</th><th>Outages</th><th>Longest</th><th>Planned</th></tr></thead>
+        <tbody id="slaDevRows"></tbody>
+      </table></div>
+    </div>
+  </section>
+
   <!-- AUDIT -->
   <section id="tab-audit" class="hidden">
     <div class="panel">
@@ -887,6 +921,7 @@ function showTab(name) {
   if (name === "fleet") load();
   if (name === "map") loadGroups().catch((e) => toast(e.message));
   if (name === "audit") loadAudit();
+  if (name === "reports") initReports();
   if (name === "settings") showSubTab(currentSub);
   if (name === "bulk") updateBulkInfo();
 }
@@ -2283,6 +2318,65 @@ async function saveMaintenance() {
   } catch (e) { toast(e.message); }
 }
 
+/* ---------------- reports (SLA / uptime) ---------------- */
+function fmtDur(ms) {
+  if (!ms || ms < 1000) return "0";
+  const s = Math.round(ms / 1000);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m`;
+  return `${s}s`;
+}
+function slaClass(pct) { return pct >= 99.9 ? "verified" : pct >= 99 ? "confirmed" : "revoked"; }
+function initReports() {
+  if (!$("slaFrom").value) {
+    const to = new Date(), from = new Date(Date.now() - 30 * 86400000);
+    $("slaTo").value = to.toISOString().slice(0, 10);
+    $("slaFrom").value = from.toISOString().slice(0, 10);
+  }
+  if (!window._sla) runSla();
+}
+async function runSla() {
+  const from = $("slaFrom").value ? new Date($("slaFrom").value + "T00:00:00").getTime() : Date.now() - 30 * 86400000;
+  const to = $("slaTo").value ? new Date($("slaTo").value + "T23:59:59").getTime() : Date.now();
+  $("slaSummary").innerHTML = '<span class="chips">Generating…</span>';
+  let r;
+  try { r = await api(`/api/reports/sla?from=${from}&to=${to}`); }
+  catch (e) { $("slaSummary").innerHTML = `<span class="chips">${esc(e.message)}</span>`; return; }
+  window._sla = r;
+  const f = r.fleet;
+  $("slaSummary").innerHTML = `
+    <div class="signal">
+      <div class="s"><div class="v" style="color:var(--${f.uptimePct >= 99.9 ? "green" : f.uptimePct >= 99 ? "accent" : "red"})">${f.uptimePct.toFixed(3)}%</div><div class="k">Fleet uptime</div></div>
+      <div class="s"><div class="v">${f.devices}</div><div class="k">Devices</div></div>
+      <div class="s"><div class="v">${fmtDur(f.downMs)}</div><div class="k">Unplanned downtime</div></div>
+      <div class="s"><div class="v">${f.outages}</div><div class="k">Outages</div></div>
+    </div>
+    <div class="chips" style="margin-top:6px">${esc(new Date(r.from).toLocaleDateString())} → ${esc(new Date(r.to).toLocaleDateString())} · planned maintenance excluded</div>`;
+  $("slaCustPanel").style.display = r.customers.length ? "" : "none";
+  $("slaCustRows").innerHTML = r.customers.map((c) => `<tr>
+    <td>${esc(c.name)}</td><td>${c.devices}</td>
+    <td><span class="pill ${slaClass(c.uptimePct)}">${c.uptimePct.toFixed(3)}%</span></td>
+    <td>${fmtDur(c.downMs)}</td><td>${c.outages}</td></tr>`).join("");
+  $("slaDevPanel").style.display = r.devices.length ? "" : "none";
+  $("slaDevRows").innerHTML = r.devices.map((d) => `<tr>
+    <td>${esc(d.label)}</td><td>${d.customerGroup ? esc(d.customerGroup) : '<span style="color:var(--muted)">—</span>'}</td>
+    <td><span class="pill ${slaClass(d.uptimePct)}">${d.uptimePct.toFixed(3)}%</span></td>
+    <td>${fmtDur(d.downMs)}</td><td>${d.outages}</td><td>${fmtDur(d.longestMs)}</td>
+    <td>${d.excludedMs ? fmtDur(d.excludedMs) : "—"}</td></tr>`).join("");
+}
+function slaCsv() {
+  const r = window._sla; if (!r) return toast("Generate a report first");
+  const rows = [["Device", "Customer", "Uptime %", "Downtime (s)", "Outages", "Longest (s)", "Planned excl (s)"]];
+  for (const d of r.devices) rows.push([d.label, d.customerGroup || "", d.uptimePct.toFixed(4), Math.round(d.downMs / 1000), d.outages, Math.round(d.longestMs / 1000), Math.round(d.excludedMs / 1000)]);
+  const csv = rows.map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = `korvix-sla-${$("slaFrom").value}_${$("slaTo").value}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
 /* ---------------- audit ---------------- */
 async function loadAudit() {
   const list = await api("/api/audit");
@@ -2316,6 +2410,7 @@ document.addEventListener("click", async (ev) => {
   if (btn.id === "pcRemove") { portState.rules.delete(btn.dataset.port); $("portcfg").close(); renderPortMap(portState.ifaces || []); try { await persistPorts(); toast("Port no longer monitored"); } catch (e) { toast("Save failed: " + e.message); } return; }
   const d = btn.dataset;
   if (d.copy != null) return copy(d.copy);
+  if (d.slaquick != null) { const to = new Date(), from = new Date(Date.now() - Number(d.slaquick) * 86400000); $("slaTo").value = to.toISOString().slice(0, 10); $("slaFrom").value = from.toISOString().slice(0, 10); return runSla(); }
   if (d.mwquick != null) { const now = new Date(); $("mwStart").value = toLocalInput(now); $("mwEnd").value = toLocalInput(new Date(now.getTime() + Number(d.mwquick) * 60000)); return; }
   if (d.mwdel != null) { if (confirm("Delete this maintenance window?")) { await api("/api/maintenance/" + encodeURIComponent(d.mwdel), { method: "DELETE" }).catch((e) => toast(e.message)); loadMaintenance(); } return; }
   if (d.hostadd != null) return addMonitoredHost(d.hostadd, d.hostname, d.hostmac);
@@ -2495,6 +2590,9 @@ $("auditReload").addEventListener("click", () => loadAudit().catch((e) => toast(
 for (const b of document.querySelectorAll("nav.subtabs button")) b.addEventListener("click", () => showSubTab(b.dataset.sub));
 $("mwScope").addEventListener("change", onMwScopeChange);
 $("mwSave").addEventListener("click", saveMaintenance);
+$("slaRun").addEventListener("click", runSla);
+$("slaCsv").addEventListener("click", slaCsv);
+$("slaPrint").addEventListener("click", () => window.print());
 $("gSave").addEventListener("click", saveGeneral);
 $("cSave").addEventListener("click", saveCustomer);
 $("cClear").addEventListener("click", clearCustForm);

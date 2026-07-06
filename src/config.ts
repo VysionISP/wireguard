@@ -177,6 +177,8 @@ const configSchema = z.object({
   hostsPath: z.string().default("data/hosts.json"),
   /** Planned maintenance windows (alert suppression). */
   maintenancePath: z.string().default("data/maintenance.json"),
+  /** Durable outage log for SLA/uptime reporting. */
+  outagesPath: z.string().default("data/outages.json"),
   /** Active issues (status board). */
   issuesPath: z.string().default("data/issues.json"),
   /** Per-device + global event log (logins, link flaps, on/offline). */

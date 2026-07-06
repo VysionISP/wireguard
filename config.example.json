@@ -78,6 +78,7 @@
   },
   "hostsPath": "data/hosts.json",
   "maintenancePath": "data/maintenance.json",
+  "outagesPath": "data/outages.json",
   "metricsPath": "data/metrics.jsonl",
   "storePath": "data/routers.json",
   "tokensPath": "data/tokens.json",

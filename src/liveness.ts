@@ -3,6 +3,7 @@ import type { RouterStore } from "./store.js";
 import type { IssueStore } from "./issues.js";
 import type { EventLog } from "./events.js";
 import type { Alerter } from "./alerts.js";
+import type { OutageStore } from "./outages.js";
 import type { RouterRecord, HealthState } from "./types.js";
 
 const MAX_TRANSITIONS = 30;
@@ -53,6 +54,8 @@ export interface LivenessDeps {
   ping?: PingFn;
   /** Returns true when an active maintenance window mutes this category. */
   suppressed?: (serial: string, group: string | undefined, category: string) => boolean;
+  /** Durable outage log for SLA reporting. */
+  outages?: OutageStore;
 }
 
 function labelOf(r: RouterRecord): string {
@@ -129,6 +132,11 @@ export async function livenessTick(deps: LivenessDeps): Promise<{ up: number; wa
     // Under a maintenance window the state still updates, but we don't raise
     // issues/alerts/events — no pages for planned work.
     const muted = Boolean(deps.suppressed?.(router.serialNumber, router.customerGroup, "offline"));
+
+    // Record the outage regardless of maintenance — SLA subtracts planned
+    // windows at report time, so we still need the real downtime span.
+    if (isOffline) deps.outages?.open(router.serialNumber, label, at);
+    else if (wasOffline) deps.outages?.close(router.serialNumber, at);
 
     if (router.lastOnline !== online) {
       router.lastOnline = online;
