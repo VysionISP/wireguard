@@ -331,13 +331,20 @@ Give a customer a **read-only public status page**: Settings → Customers →
 serials, IPs or credentials —
 
 - an overall banner (operational / partially degraded / service disruption),
-- each of their devices with live up/degraded/down state,
+- each of their devices with live up/degraded/down state, its **SLA
+  commitment and whether it's currently met** (e.g. `SLA 99.9% ✓`), and any
+  **ping-monitored internal equipment nested under its router** (the NVR, an
+  AP…) with its own state,
+- a read-only **network map** — the same topology you maintain on the Map tab
+  (node states, links, port names; internal ids never leave the server),
 - current incidents in customer-friendly words ("Device offline", "Link
   issue"), a planned-maintenance notice when a window is active,
 - and their last-30-days uptime % (maintenance excluded).
 
-The page refreshes itself every 30 s. Clicking **Status page** again rotates
-the token (killing the old link); **Disable** shuts the page off entirely.
+The page refreshes itself every 30 s. **The link is permanent** — reopening
+the dialog always shows the same URL, so what you've given the customer keeps
+working. **Rotate link** explicitly mints a new URL (killing the old one, for
+leaks); **Disable** shuts the page off entirely.
 
 Layouts and links are stored per group in `topologyPath`
 (`data/topology.json`). Removing a router also drops it from any map.

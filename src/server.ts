@@ -1529,14 +1529,19 @@ export function buildApp(deps: AppDeps): Express {
   });
 
   // ---- public status page (tokenized, read-only) ------------------------
-  // Enable / rotate a customer's status-page link. Rotating invalidates the
-  // old URL, so a leaked link is one click to kill.
+  // Get-or-create a customer's status-page link. The URL is STABLE — once
+  // handed to a client it keeps working; pass {rotate:true} to explicitly
+  // mint a new token (killing the old link, e.g. after a leak).
   app.post("/api/customers/:name/status-token", requireAdmin, (req: Request, res: Response) => {
     const name = req.params.name;
     if (!customers.has(name)) customers.upsert(name, {});
-    const token = "st-" + crypto.randomBytes(12).toString("hex");
-    customers.setStatusToken(name, token);
-    audit.log(who(req), "customer.statuspage", name, "enabled/rotated");
+    const rotate = Boolean((req.body ?? {}).rotate);
+    let token = customers.get(name)?.statusToken;
+    if (!token || rotate) {
+      token = "st-" + crypto.randomBytes(12).toString("hex");
+      customers.setStatusToken(name, token);
+      audit.log(who(req), "customer.statuspage", name, rotate ? "rotated" : "enabled");
+    }
     res.json({ ok: true, token, url: `${config.server.publicUrl.replace(/\/$/, "")}/status/${token}` });
   });
   app.delete("/api/customers/:name/status-token", requireAdmin, (req: Request, res: Response) => {
@@ -1567,6 +1572,8 @@ export function buildApp(deps: AppDeps): Express {
     }
     let down = 0;
     let eff = 0;
+    const hostState = (s: string | undefined): string =>
+      s === "up" ? "up" : s === "warning" ? "degraded" : s === "offline" ? "down" : "unknown";
     const devices = routers.map((r) => {
       const maint = maintenance
         .windowsCovering(r.serialNumber, r.customerGroup, "offline")
@@ -1577,13 +1584,43 @@ export function buildApp(deps: AppDeps): Express {
       const state =
         r.health === "warning" ? "degraded" : (r.health ? r.health !== "offline" : r.lastOnline !== false) ? "up" : "down";
       const upSince = [...(r.transitions ?? [])].reverse().find((t) => t.online)?.at ?? null;
-      return { label: r.label || r.identity || r.serialNumber, state, upSince: state === "up" ? upSince : null };
+      const target = r.slaTarget && r.slaTarget > 0 ? r.slaTarget : null;
+      return {
+        label: r.label || r.identity || r.serialNumber,
+        state,
+        upSince: state === "up" ? upSince : null,
+        // The device's committed SLA and where it stands against it right now.
+        uptime30d: sla.uptimePct,
+        slaTarget: target,
+        meetsSla: target === null ? null : sla.uptimePct + 1e-9 >= target,
+        // Internal equipment this router ping-monitors, shown nested under it.
+        hosts: hosts
+          .forRouter(r.serialNumber)
+          .filter((h) => h.enabled)
+          .map((h) => ({ label: h.name || h.address, state: hostState(h.state) })),
+      };
     });
     const serials = new Set(routers.map((r) => r.serialNumber));
     const incidents = issues
       .list(false)
       .filter((i) => serials.has(i.serialNumber) && i.type !== "login")
       .map((i) => ({ label: i.label, type: i.type, since: i.openedAt }));
+    // Sanitized topology for the page's read-only map: internal router ids are
+    // remapped to opaque n0/n1/... keys; only labels, states, positions and
+    // port names go out.
+    const topo = topology.get(customer.name);
+    const keyOf = new Map(routers.map((r, i) => [r.id, `n${i}`]));
+    const map = {
+      nodes: routers.map((r, i) => ({
+        key: `n${i}`,
+        label: r.label || r.identity || "device",
+        state: devices[i].state,
+        pos: topo.nodes[r.id] ?? null,
+      })),
+      links: topo.links
+        .filter((l) => keyOf.has(l.a) && keyOf.has(l.b))
+        .map((l) => ({ a: keyOf.get(l.a), b: keyOf.get(l.b), aIface: l.aIface, bIface: l.bIface })),
+    };
     const maint = maintenance
       .active()
       .filter((w) => w.scopeKind === "all" || (w.scopeKind === "customer" && w.scopeValue === customer.name) || (w.scopeKind === "device" && routers.some((r) => r.serialNumber === w.scopeValue)))
@@ -1595,6 +1632,7 @@ export function buildApp(deps: AppDeps): Express {
       devices,
       incidents,
       maintenance: maint,
+      map,
       uptime30d: eff > 0 ? Math.max(0, (1 - down / eff) * 100) : 100,
     });
   });

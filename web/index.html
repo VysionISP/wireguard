@@ -957,14 +957,20 @@ async function loadCustomers() {
     </td></tr>`).join("");
   window._customers = list;
 }
-async function customerStatusPage(name) {
-  const r = await api("/api/customers/" + encodeURIComponent(name) + "/status-token", { method: "POST" });
+async function customerStatusPage(name, rotate) {
+  const r = await api("/api/customers/" + encodeURIComponent(name) + "/status-token", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ rotate: !!rotate }),
+  });
   $("mTitle").textContent = "Status page — " + name;
   $("mBody").innerHTML = `
-    <p>Share this read-only link with <b>${esc(name)}</b>. It shows their devices up/down, current incidents and 30-day uptime — no login needed, the secret URL is the access.</p>
+    <p>Share this read-only link with <b>${esc(name)}</b>. It shows their devices up/down, monitored equipment, network map, incidents, SLA and 30-day uptime — no login needed, the secret URL is the access.</p>
     <div class="cred"><div class="row"><span>link</span><code class="mono" style="word-break:break-all">${esc(r.url)}</code>
       <button data-copy="${esc(r.url)}">Copy</button></div></div>
-    <p class="chips">Generating again rotates the token and kills the old link. <button class="danger" data-custpagedel="${esc(name)}" style="margin-left:8px">Disable status page</button></p>`;
+    <p class="chips"><b>This link is permanent</b> — opening this dialog again always shows the same URL.
+      <button data-custrotate="${esc(name)}" style="margin-left:8px">Rotate link</button>
+      <button class="danger" data-custpagedel="${esc(name)}" style="margin-left:4px">Disable status page</button></p>
+    ${rotate ? '<p class="chips" style="color:var(--warn)">Link rotated — the old URL no longer works. Send the customer this new one.</p>' : ""}`;
   $("modal").showModal();
   loadCustomers();
 }
@@ -2464,6 +2470,7 @@ document.addEventListener("click", async (ev) => {
   if (d.custadd != null) { return addDeviceToCustomer(d.custadd).catch((e) => toast(e.message)); }
   if (d.custedit != null) { return editCustomer(d.custedit); }
   if (d.custpage != null) { return customerStatusPage(d.custpage).catch((e) => toast(e.message)); }
+  if (d.custrotate != null) { if (confirm("Rotate the status-page link? The URL the customer currently has stops working.")) return customerStatusPage(d.custrotate, true).catch((e) => toast(e.message)); return; }
   if (d.custpagedel != null) { if (confirm("Disable this customer's status page? The link stops working immediately.")) { await api("/api/customers/" + encodeURIComponent(d.custpagedel) + "/status-token", { method: "DELETE" }).catch((e) => toast(e.message)); $("modal").close(); toast("Status page disabled"); loadCustomers(); } return; }
   if (d.custdel != null) { if (confirm(`Delete customer "${d.custdel}"? Devices are unassigned and its map is cleared.`)) { await api("/api/customers/" + encodeURIComponent(d.custdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadCustomers(); } return; }
   if (d.adddev != null) {

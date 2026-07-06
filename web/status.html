@@ -33,8 +33,23 @@
   .dot.down { background: var(--crit); box-shadow: 0 0 8px var(--crit); animation: pulse 1.2s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
   .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row.subrow { padding-left: 44px; font-size: 13px; background: #080d13; }
+  .row.subrow .dot { width: 7px; height: 7px; }
+  .dot.unknown { background: #35424f; }
+  .slachip { font-size: 10.5px; letter-spacing: .04em; border: 1px solid var(--border); border-radius: 4px; padding: 2px 7px; white-space: nowrap; }
+  .slachip.ok { color: var(--ok); border-color: #14442c; }
+  .slachip.bad { color: var(--crit); border-color: #5a1a1e; }
   .row .state { color: var(--muted); font-size: 12.5px; }
   .up .state { color: var(--ok); } .stat-degraded { color: var(--warn); } .stat-down { color: var(--crit); }
+  .mapbox { padding: 8px 10px 12px; }
+  .mapbox svg { display: block; width: 100%; height: auto; }
+  .mapbox .lnk { stroke: #22384a; stroke-width: 2; }
+  .mapbox .node rect { fill: #0e151d; stroke: var(--border); rx: 7; }
+  .mapbox .node.up rect { stroke: #14442c; }
+  .mapbox .node.degraded rect { stroke: #4a3a10; }
+  .mapbox .node.down rect { stroke: #5a1a1e; }
+  .mapbox text { font-family: var(--mono); fill: var(--text); }
+  .mapbox .plbl { fill: var(--muted); font-size: 9px; }
   .uptime { display: flex; gap: 20px; padding: 16px 18px; align-items: baseline; }
   .uptime .big { font-size: 30px; font-weight: 700; }
   .uptime .k { color: var(--muted); font-size: 12px; }
@@ -51,6 +66,7 @@
     <div id="banner" class="banner operational">—</div>
     <div id="maint" class="maint hidden"></div>
     <div class="panel"><h2>Services</h2><div id="devices"></div></div>
+    <div class="panel hidden" id="mapPanel"><h2>Network</h2><div class="mapbox"><svg id="map" viewBox="0 0 700 300" preserveAspectRatio="xMidYMid meet"></svg></div></div>
     <div class="panel hidden" id="incPanel"><h2>Current incidents</h2><div id="incidents"></div></div>
     <div class="panel"><h2>Last 30 days</h2><div class="uptime"><div class="big" id="uptime">—</div><div class="k">uptime, planned maintenance excluded</div></div></div>
     <footer id="updated"></footer>
@@ -86,19 +102,74 @@ async function load() {
     m.classList.remove("hidden");
     m.textContent = "🔧 Planned maintenance in progress" + (r.maintenance[0].note ? " — " + r.maintenance[0].note : "");
   } else m.classList.add("hidden");
-  $("devices").innerHTML = (r.devices || []).map((d) => `
+  $("devices").innerHTML = (r.devices || []).map((d) => {
+    const sla = d.slaTarget != null
+      ? `<span class="slachip ${d.meetsSla ? "ok" : "bad"}" title="30-day uptime ${d.uptime30d.toFixed(2)}% vs ${d.slaTarget}% commitment">SLA ${d.slaTarget}% ${d.meetsSla ? "✓" : "✗ " + d.uptime30d.toFixed(2) + "%"}</span>`
+      : "";
+    const hostRows = (d.hosts || []).map((h) => `
+      <div class="row subrow ${h.state}"><span class="dot ${esc(h.state)}"></span>
+        <span class="name">${esc(h.label)}</span>
+        <span class="state stat-${esc(h.state)}">${h.state === "unknown" ? "checking…" : h.state === "up" ? "operational" : h.state}</span></div>`).join("");
+    return `
     <div class="row ${d.state}"><span class="dot ${esc(d.state)}"></span>
-      <span class="name">${esc(d.label)}</span>
-      <span class="state stat-${esc(d.state)}">${d.state === "up" ? (d.upSince ? "up · " + since(d.upSince) : "operational") : d.state}</span></div>`).join("")
+      <span class="name">${esc(d.label)}</span>${sla}
+      <span class="state stat-${esc(d.state)}">${d.state === "up" ? (d.upSince ? "up · " + since(d.upSince) : "operational") : d.state}</span></div>${hostRows}`;
+  }).join("")
     || '<div class="row"><span class="name" style="color:var(--muted)">No services listed.</span></div>';
   $("incPanel").classList.toggle("hidden", !(r.incidents || []).length);
   $("incidents").innerHTML = (r.incidents || []).map((i) => `
     <div class="row"><span class="dot down"></span><span class="name">${esc(i.label)}</span>
       <span class="state stat-down">${esc(INC[i.type] || i.type)} · ${since(i.since)}</span></div>`).join("");
+  renderMap(r.map);
   $("uptime").textContent = r.uptime30d.toFixed(r.uptime30d >= 99.99 ? 3 : 2) + "%";
   $("uptime").style.color = r.uptime30d >= 99.9 ? "var(--ok)" : r.uptime30d >= 99 ? "var(--warn)" : "var(--crit)";
   $("updated").textContent = "Updated " + new Date(r.at).toLocaleTimeString() + " · refreshes automatically";
 }
+const DOTC = { up: "var(--ok)", degraded: "var(--warn)", down: "var(--crit)" };
+function renderMap(map) {
+  const panel = $("mapPanel");
+  if (!map || !map.nodes || map.nodes.length < 2) { panel.classList.add("hidden"); return; }
+  panel.classList.remove("hidden");
+  const W = 700, H = 300, PAD = 60;
+
+  // Positions: use the saved layout, auto-placing any unsaved node on a circle.
+  const saved = map.nodes.filter((n) => n.pos);
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const n of saved) { minX = Math.min(minX, n.pos.x); maxX = Math.max(maxX, n.pos.x); minY = Math.min(minY, n.pos.y); maxY = Math.max(maxY, n.pos.y); }
+  const havebox = saved.length >= 2 && maxX > minX;
+  const pos = new Map();
+  map.nodes.forEach((n, i) => {
+    if (n.pos && havebox) {
+      pos.set(n.key, {
+        x: PAD + ((n.pos.x - minX) / (maxX - minX || 1)) * (W - PAD * 2),
+        y: PAD + ((n.pos.y - minY) / ((maxY - minY) || 1)) * (H - PAD * 2),
+      });
+    } else {
+      const a = (i / map.nodes.length) * Math.PI * 2 - Math.PI / 2;
+      pos.set(n.key, { x: W / 2 + Math.cos(a) * (W / 2 - PAD - 20), y: H / 2 + Math.sin(a) * (H / 2 - PAD) });
+    }
+  });
+
+  let svg = "";
+  for (const l of map.links || []) {
+    const a = pos.get(l.a), b = pos.get(l.b);
+    if (!a || !b) continue;
+    svg += `<line class="lnk" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`;
+    const lx = (t) => a.x + (b.x - a.x) * t, ly = (t) => a.y + (b.y - a.y) * t;
+    if (l.aIface) svg += `<text class="plbl" x="${lx(0.22)}" y="${ly(0.22) - 5}" text-anchor="middle">${esc(l.aIface)}</text>`;
+    if (l.bIface) svg += `<text class="plbl" x="${lx(0.78)}" y="${ly(0.78) - 5}" text-anchor="middle">${esc(l.bIface)}</text>`;
+  }
+  for (const n of map.nodes) {
+    const p = pos.get(n.key);
+    const w = Math.max(90, n.label.length * 7.5 + 34);
+    svg += `<g class="node ${esc(n.state)}">
+      <rect x="${p.x - w / 2}" y="${p.y - 17}" width="${w}" height="34" rx="7"/>
+      <circle cx="${p.x - w / 2 + 15}" cy="${p.y}" r="4.5" fill="${DOTC[n.state] || "var(--muted)"}"/>
+      <text x="${p.x - w / 2 + 27}" y="${p.y + 4}" font-size="12">${esc(n.label)}</text></g>`;
+  }
+  $("map").innerHTML = svg;
+}
+
 load();
 setInterval(load, 30000);
 </script>
