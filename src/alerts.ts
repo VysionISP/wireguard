@@ -70,25 +70,50 @@ export class Alerter {
     );
   }
 
+  /**
+   * Run one delivery with a retry: transient failures (DNS blip, timeout,
+   * Telegram 5xx) get a second attempt after a short pause, and every failure
+   * is logged with WHICH destination failed so "fetch failed" is debuggable.
+   */
+  private async attempt(name: string, job: () => Promise<unknown>): Promise<boolean> {
+    for (let n = 1; n <= 2; n++) {
+      try {
+        await job();
+        return true;
+      } catch (err) {
+        const msg = err instanceof Error ? (err.cause ? `${err.message} (${(err.cause as Error).message ?? err.cause})` : err.message) : String(err);
+        console.error(`alert delivery failed (${name}, attempt ${n}/2): ${msg}`);
+        if (n === 1) await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+    return false;
+  }
+
   private async deliver(text: string, event: AlertEvent, router: RouterRecord): Promise<void> {
     if (this.send) return this.send(text, event, router);
     const jobs: Promise<unknown>[] = [];
     if (this.cfg.webhookUrl) {
+      const url = this.cfg.webhookUrl;
       jobs.push(
-        fetch(this.cfg.webhookUrl, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            text,
-            event,
-            router: { serialNumber: router.serialNumber, label: router.label ?? "", tunnelIp: router.tunnelIp },
+        this.attempt("webhook", () =>
+          fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              text,
+              event,
+              router: { serialNumber: router.serialNumber, label: router.label ?? "", tunnelIp: router.tunnelIp },
+            }),
+            signal: AbortSignal.timeout(10000),
+          }).then((res) => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
           }),
-          signal: AbortSignal.timeout(10000),
-        }),
+        ),
       );
     }
     if (this.cfg.telegramBotToken && this.cfg.telegramChatId) {
-      jobs.push(this.tg.send(this.cfg.telegramBotToken, this.cfg.telegramChatId, text));
+      const { telegramBotToken, telegramChatId } = this.cfg;
+      jobs.push(this.attempt(`telegram:${telegramChatId}`, () => this.tg.send(telegramBotToken!, telegramChatId!, text)));
     }
     // Dashboard-configured routing: send to each chat subscribed to this
     // event category.
@@ -96,13 +121,12 @@ export class Alerter {
     if (tgSettings?.botToken) {
       const key = routeKey(event);
       for (const chat of tgSettings.chats) {
-        if (chat.events?.[key]) jobs.push(this.tg.send(tgSettings.botToken, chat.id, text));
+        if (chat.events?.[key]) {
+          jobs.push(this.attempt(`telegram:${chat.title || chat.id}`, () => this.tg.send(tgSettings.botToken, chat.id, text)));
+        }
       }
     }
-    const results = await Promise.allSettled(jobs);
-    for (const r of results) {
-      if (r.status === "rejected") console.error(`alert delivery failed: ${r.reason}`);
-    }
+    await Promise.allSettled(jobs);
   }
 
   /** Called by the monitor on every recorded transition. */

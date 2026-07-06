@@ -131,6 +131,12 @@ const configSchema = z.object({
       notifyOnline: z.boolean().default(true),
       /** Max one offline + one online alert per router per this window (flap guard). */
       suppressMinutes: z.number().int().min(0).default(15),
+      /** Escalate a critical issue nobody acked after this long (0 = off). */
+      escalateAfterMinutes: z.number().int().min(0).default(10),
+      /** Then keep re-escalating on this interval until acked/resolved. */
+      escalateEveryMinutes: z.number().int().min(1).default(15),
+      /** Give up re-paging after this many escalations per issue. */
+      maxEscalations: z.number().int().min(1).default(3),
     })
     .default({}),
   /** Active per-device monitoring (logins, port link state) over the tunnel. */

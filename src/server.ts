@@ -45,6 +45,8 @@ export interface AppDeps {
   hosts?: HostStore;
   maintenance?: MaintenanceStore;
   outages?: OutageStore;
+  /** Chats the Telegram callback poller has seen (merged into chat discovery). */
+  extraChats?: () => Array<{ id: string; title: string; type: string }>;
   backups?: BackupStore;
   alerter?: Alerter;
   tokens?: TokenStore;
@@ -841,8 +843,12 @@ export function buildApp(deps: AppDeps): Express {
     }
     try {
       const me = await telegram.getMe(parsed.data.botToken);
-      const chats = await telegram.getChats(parsed.data.botToken);
-      res.json({ ok: true, username: me.username, chats });
+      // Merge a fresh getUpdates read with chats the escalation poller has
+      // already consumed (the poller advances the update offset, so a plain
+      // read alone would miss chats it has seen).
+      const byId = new Map((deps.extraChats?.() ?? []).map((c) => [c.id, c]));
+      for (const c of await telegram.getChats(parsed.data.botToken)) byId.set(c.id, c);
+      res.json({ ok: true, username: me.username, chats: [...byId.values()] });
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }

@@ -152,6 +152,25 @@ online alert per window. The webhook receives
 `{text, event, router:{serialNumber,label,tunnelIp}}` — point it at Slack,
 Discord, n8n, or your own endpoint.
 
+Delivery is reliable by design: every destination (webhook, each Telegram
+chat) is retried once after 3 s on failure, and failures are logged naming the
+destination that failed, not just "fetch failed".
+
+### Escalation & acknowledging from Telegram
+
+A critical issue nobody acknowledges within `alerts.escalateAfterMinutes`
+(default 10, 0 = off) is re-announced as a 🚨 **ESCALATION** — to the webhook
+and to every Telegram chat subscribed to the *Offline* category — and keeps
+re-paging every `escalateEveryMinutes` (default 15) up to `maxEscalations`
+(default 3) until someone acks it or it resolves.
+
+Escalation messages on Telegram carry an inline **✅ Ack** button: pressing it
+acknowledges the issue right from the chat (recorded in the audit log as
+`tg:<username>`), edits the message to "ACKED by …", and stops the re-paging.
+The button works via a long-poll the server runs against the Bot API; the
+poller also keeps the Settings chat-discovery working (chats it consumes are
+merged into "Verify & fetch chats").
+
 ### Telegram routing (Settings tab)
 
 Beyond the static config above, the **Settings** tab (admin) configures

@@ -15,6 +15,8 @@ import { HostStore } from "./hosts.js";
 import { startHostMonitor } from "./hostmonitor.js";
 import { MaintenanceStore, type MaintCategory } from "./maintenance.js";
 import { OutageStore } from "./outages.js";
+import { EscalationEngine } from "./escalation.js";
+import { AuditLog } from "./audit.js";
 import { Alerter } from "./alerts.js";
 import { TokenStore } from "./tokens.js";
 import { UserStore } from "./users.js";
@@ -59,7 +61,20 @@ program
     // The monitors pass a coarse category ("offline"/"link"/"host"/"login").
     const suppressed = (serial: string, group: string | undefined, category: string) =>
       maintenance.suppressed(serial, group, category as MaintCategory);
-    const app = buildApp({ config, store, wg, alerter, issues, events, settings, metrics, hosts, maintenance, outages });
+    const escalation = new EscalationEngine({
+      issues, events, settings,
+      audit: new AuditLog(config.auditPath),
+      cfg: config.alerts,
+      webhookUrl: config.alerts.webhookUrl,
+    });
+    const app = buildApp({
+      config, store, wg, alerter, issues, events, settings, metrics, hosts, maintenance, outages,
+      extraChats: () => [...escalation.seenChats.values()],
+    });
+    if (config.alerts.escalateAfterMinutes > 0) {
+      escalation.start(60);
+      console.log(`escalation: unacked criticals re-page after ${config.alerts.escalateAfterMinutes}m, every ${config.alerts.escalateEveryMinutes}m, max ${config.alerts.maxEscalations}x (Telegram Ack button live)`);
+    }
     if (config.liveness.enabled) {
       // Active ping owns online/warning/offline; run the handshake monitor only
       // for handshake-age bookkeeping (no offline issues, to avoid duplicates).

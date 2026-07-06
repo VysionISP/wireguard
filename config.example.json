@@ -47,7 +47,10 @@
     "telegramChatId": "",
     "notifyOnRegister": true,
     "notifyOnline": true,
-    "suppressMinutes": 15
+    "suppressMinutes": 15,
+    "escalateAfterMinutes": 10,
+    "escalateEveryMinutes": 15,
+    "maxEscalations": 3
   },
   "deviceMonitor": {
     "enabled": true,
