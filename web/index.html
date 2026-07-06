@@ -1363,8 +1363,7 @@ async function openDetails(ref) {
       </div>
       <label><input type="checkbox" id="monEnabled" ${mon.enabled ? "checked" : ""}> Active monitoring (poll this device over the tunnel)</label>
       <label><input type="checkbox" id="monLogin" ${mon.alertOnLogin ? "checked" : ""}> Alert &amp; log on router login (Winbox/SSH/WebFig/API)</label>
-      <label><input type="checkbox" id="monLink" ${mon.alertOnLinkDown ? "checked" : ""}> Enable port monitoring (link status + traffic thresholds)</label>
-      <div class="r"><span class="chips">Port map — click a port to set link status, inverted link, or traffic alerts</span></div>
+      <div class="r"><span class="chips">Port monitoring — click a port to set link status, inverted link, or traffic alerts. Any configured port is watched automatically.</span></div>
       <div id="portmap"><span class="chips">loading ports…</span></div>
       <div class="r"><span class="chips">Watch ports</span>
         <input id="monIfaces" placeholder="blank = no ports watched" value="${esc((mon.watchInterfaces || []).join(", "))}" style="flex:1;min-width:160px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px;font-family:var(--mono);font-size:12px">
@@ -1501,21 +1500,35 @@ function openPortCfg(name) {
   $("pcRemove").dataset.port = name;
   $("portcfg").showModal();
 }
-function savePortCfg(name) {
+// Persist the current port rules to the server immediately (no separate
+// "Save monitoring" step needed for port changes).
+async function persistPorts() {
+  const ref = portState.ref;
+  if (!ref) return;
+  const ports = [...portState.rules.values()].map((r) => ({
+    name: r.name, link: !!r.link, inverted: !!r.inverted, highBps: r.highBps || 0, lowBps: r.lowBps || 0,
+  }));
+  await api("/api/routers/" + encodeURIComponent(ref) + "/monitoring", {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ports, alertOnLinkDown: ports.length > 0 }),
+  });
+}
+async function savePortCfg(name) {
   const hv = parseFloat($("pcHigh").value) || 0, lv = parseFloat($("pcLow").value) || 0;
   const highBps = Math.round(hv * BPS_UNIT[$("pcHighU").value]);
   const lowBps = Math.round(lv * BPS_UNIT[$("pcLowU").value]);
   const link = $("pcLink").checked, inverted = $("pcInv").checked;
   if (!link && !highBps && !lowBps) {
-    // nothing selected == stop monitoring this port
-    portState.rules.delete(name);
+    portState.rules.delete(name); // nothing selected == stop monitoring this port
   } else {
     portState.rules.set(name, { name, link, inverted, highBps, lowBps });
   }
   $("portcfg").close();
-  // Re-render the faceplate to reflect the new badge/state.
   renderPortMap(portState.ifaces || []);
-  toast(portState.rules.has(name) ? "Port " + name + " configured — click Save monitoring to apply" : "Port " + name + " no longer monitored — click Save monitoring to apply");
+  try {
+    await persistPorts();
+    toast(portState.rules.has(name) ? "Monitoring " + name : name + " no longer monitored");
+  } catch (e) { toast("Save failed: " + e.message); }
 }
 function ruleSummary(r) {
   const parts = [];
@@ -1549,10 +1562,16 @@ async function saveMonitoring(ref) {
     deviceType: $("monType").value,
     enabled: $("monEnabled").checked,
     alertOnLogin: $("monLogin").checked,
-    alertOnLinkDown: $("monLink").checked,
   };
-  if (ports) body.ports = ports;
-  else body.watchInterfaces = $("monIfaces").value.split(",").map((s) => s.trim()).filter(Boolean);
+  if (ports) {
+    body.ports = ports;
+    // Legacy flag kept in sync: on when any port is configured.
+    body.alertOnLinkDown = ports.length > 0;
+  } else {
+    const watch = $("monIfaces").value.split(",").map((s) => s.trim()).filter(Boolean);
+    body.watchInterfaces = watch;
+    body.alertOnLinkDown = watch.length > 0;
+  }
   await api("/api/routers/" + encodeURIComponent(ref) + "/monitoring", {
     method: "PATCH", headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -2181,7 +2200,7 @@ document.addEventListener("click", async (ev) => {
   if (btn.id === "pingTestBtn") return doPingTest();
   if (btn.id === "pingMonBtn") return monitorStatic();
   if (btn.id === "pcSave") return savePortCfg(btn.dataset.port);
-  if (btn.id === "pcRemove") { portState.rules.delete(btn.dataset.port); $("portcfg").close(); renderPortMap(portState.ifaces || []); return toast("Port no longer monitored — click Save monitoring to apply"); }
+  if (btn.id === "pcRemove") { portState.rules.delete(btn.dataset.port); $("portcfg").close(); renderPortMap(portState.ifaces || []); try { await persistPorts(); toast("Port no longer monitored"); } catch (e) { toast("Save failed: " + e.message); } return; }
   const d = btn.dataset;
   if (d.copy != null) return copy(d.copy);
   if (d.hostadd != null) return addMonitoredHost(d.hostadd, d.hostname, d.hostmac);

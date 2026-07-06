@@ -90,8 +90,10 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
     const tickMs = Date.now();
     let dirty = false;
 
-    // ---- per-port monitoring: link state (optionally inverted) + traffic
-    if (mon.alertOnLinkDown) {
+    // ---- per-port monitoring: link state (optionally inverted) + traffic.
+    // Any configured port rule is evaluated — the device is already gated by
+    // monitoring.enabled, so having a rule at all means "watch this port".
+    {
       const rules = new Map(effectivePorts(mon).map((p) => [p.name, p]));
       if (rules.size > 0) {
         const ifaces = await fetchIfaces(router.tunnelIp, router.username, router.password);

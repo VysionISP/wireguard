@@ -157,6 +157,29 @@ describe("deviceMonitorTick", () => {
     expect(alerts.some((a) => /link went DOWN/i.test(a))).toBe(false);
   });
 
+  it("alerts on link-down for a configured port even if the legacy alertOnLinkDown flag is off", async () => {
+    const store = new RouterStore(path.join(tempDir(), "routers.json"));
+    const r = router("PORT1", 21);
+    // The trap: a port rule exists but the old master switch is false.
+    r.monitoring!.alertOnLinkDown = false;
+    r.monitoring!.ports = [{ name: "ether1", link: true, inverted: false }];
+    store.save(r);
+    const issues = new IssueStore(path.join(tempDir(), "issues.json"));
+    const events = new EventLog(path.join(tempDir(), "events.jsonl"));
+    const alerts: string[] = [];
+    const alerter = new Alerter({ webhookUrl: "https://h.test", notifyOnRegister: true, notifyOnline: true, suppressMinutes: 0 } as any, async (t) => { alerts.push(t); });
+    let ifaces: IfaceState[] = [{ name: "ether1", type: "ether", running: true, disabled: false, rxByte: 0, txByte: 0 }];
+    const deps = {
+      store, wg: wgFresh([fakeKey(21)]), issues, events, alerter, offlineAfterSeconds: 180,
+      managementUsername: "wg-mgmt", fetchInterfaces: async () => ifaces, fetchLog: async () => [],
+    };
+    await deviceMonitorTick(deps); // baseline
+    ifaces = [{ name: "ether1", type: "ether", running: false, disabled: false, rxByte: 0, txByte: 0 }];
+    await deviceMonitorTick(deps);
+    expect(issues.counts().warning).toBe(1);
+    expect(alerts.some((a) => /link went DOWN/i.test(a))).toBe(true);
+  });
+
   it("inverted link rule alerts when a port that should stay DOWN comes UP", async () => {
     const store = new RouterStore(path.join(tempDir(), "routers.json"));
     const r = router("INV1", 11);
