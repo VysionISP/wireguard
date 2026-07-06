@@ -56,6 +56,12 @@
     "defaultAlertOnLogin": true,
     "defaultAlertOnLinkDown": true
   },
+  "metrics": {
+    "enabled": true,
+    "sampleSeconds": 300,
+    "retentionDays": 14
+  },
+  "metricsPath": "data/metrics.jsonl",
   "storePath": "data/routers.json",
   "tokensPath": "data/tokens.json",
   "usersPath": "data/users.json",

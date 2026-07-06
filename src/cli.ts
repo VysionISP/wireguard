@@ -9,6 +9,7 @@ import { revokeRouter, verifyRouter } from "./actions.js";
 import { syncPeers } from "./sync.js";
 import { startMonitor } from "./monitor.js";
 import { startDeviceMonitor } from "./devicemonitor.js";
+import { MetricsStore, startMetricsSampler } from "./metrics.js";
 import { Alerter } from "./alerts.js";
 import { TokenStore } from "./tokens.js";
 import { UserStore } from "./users.js";
@@ -46,7 +47,8 @@ program
     const alerter = new Alerter(config.alerts, null, settings);
     const issues = new IssueStore(config.issuesPath);
     const events = new EventLog(config.eventsPath);
-    const app = buildApp({ config, store, wg, alerter, issues, events, settings });
+    const metrics = new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
+    const app = buildApp({ config, store, wg, alerter, issues, events, settings, metrics });
     startMonitor(store, wg, config.monitor.intervalSeconds, config.monitor.offlineAfterSeconds, alerter, { issues, events });
     if (config.deviceMonitor.enabled) {
       startDeviceMonitor(
@@ -54,6 +56,13 @@ program
         config.deviceMonitor.intervalSeconds,
       );
       console.log(`device monitor: every ${config.deviceMonitor.intervalSeconds}s (logins + link state)`);
+    }
+    if (config.metrics.enabled) {
+      startMetricsSampler(
+        { store, wg, metrics, offlineAfterSeconds: config.monitor.offlineAfterSeconds },
+        config.metrics.sampleSeconds,
+      );
+      console.log(`metrics sampler: every ${config.metrics.sampleSeconds}s (traffic history, ${config.metrics.retentionDays}d retention)`);
     }
     if (alerter.enabled) console.log("alerts: enabled");
     app.listen(config.server.port, config.server.host, () => {

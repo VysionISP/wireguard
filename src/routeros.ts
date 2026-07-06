@@ -205,3 +205,165 @@ export async function fetchLiveStats(
     lte,
   };
 }
+
+// ---- device profile: DHCP leases, IP addresses, health, firmware ---------
+
+export interface DhcpLease {
+  address: string;
+  macAddress: string;
+  hostName: string;
+  status: string;
+  server: string;
+  expiresAfter: string;
+  lastSeen: string;
+  dynamic: boolean;
+  comment: string;
+}
+
+export interface IpAddress {
+  address: string;
+  network: string;
+  interface: string;
+  disabled: boolean;
+}
+
+export interface HealthItem {
+  name: string;
+  value: string;
+  type: string;
+}
+
+export interface RouterBoardInfo {
+  model: string;
+  serialNumber: string;
+  firmware: string;
+  firmwareType: string;
+  upgradeAvailable: string;
+}
+
+export interface DeviceProfile {
+  identity: string;
+  resource: {
+    uptime: string;
+    version: string;
+    cpuLoad: number;
+    freeMemory: number;
+    totalMemory: number;
+    boardName: string;
+    cpuCount: string;
+    architecture: string;
+  };
+  routerboard: RouterBoardInfo | null;
+  health: HealthItem[];
+  ipAddresses: IpAddress[];
+  dhcpLeases: DhcpLease[];
+  interfaces: LiveInterface[];
+}
+
+export type FetchProfileFn = typeof fetchDeviceProfile;
+
+/**
+ * Aggregate device profile over the tunnel. Every section is best-effort: a
+ * board with no DHCP server, no health sensors or an older ROS simply yields
+ * an empty list for that section rather than failing the whole request.
+ */
+export async function fetchDeviceProfile(
+  tunnelIp: string,
+  username: string,
+  password: string,
+  timeoutMs = 8000,
+): Promise<DeviceProfile> {
+  const auth = Buffer.from(`${username}:${password}`).toString("base64");
+  const base = `http://${tunnelIp}/rest`;
+  const get = async (path: string): Promise<unknown> => {
+    const res = await fetch(`${base}${path}`, {
+      headers: { authorization: `Basic ${auth}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) throw new Error(`${path}: ${res.status}`);
+    return res.json();
+  };
+  const arr = (v: unknown): Array<Record<string, string>> => (Array.isArray(v) ? v : []);
+  const obj = (v: unknown): Record<string, string> =>
+    v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, string>) : {};
+
+  const [identityR, resourceR, boardR, healthR, ipR, leaseR, ifaceR] = await Promise.allSettled([
+    get("/system/identity"),
+    get("/system/resource"),
+    get("/system/routerboard"),
+    get("/system/health"),
+    get("/ip/address"),
+    get("/ip/dhcp-server/lease"),
+    get("/interface"),
+  ]);
+  const val = <T>(r: PromiseSettledResult<unknown>, f: (v: unknown) => T, fallback: T): T =>
+    r.status === "fulfilled" ? f(r.value) : fallback;
+
+  const identity = val(identityR, obj, {});
+  const resource = val(resourceR, obj, {});
+  const board = val(boardR, obj, {});
+  // /system/health is an array of {name,value,type} on newer ROS but a flat
+  // object ({temperature, voltage, ...}) on older v7 — normalise both.
+  const health: HealthItem[] = val(
+    healthR,
+    (v) =>
+      Array.isArray(v)
+        ? v.map((h) => ({ name: h.name ?? "?", value: h.value ?? "", type: h.type ?? "" }))
+        : Object.entries(obj(v))
+            .filter(([k]) => k !== ".id")
+            .map(([k, val]) => ({ name: k, value: String(val), type: "" })),
+    [],
+  );
+  const ip = val(ipR, arr, []);
+  const leases = val(leaseR, arr, []);
+  const ifaces = val(ifaceR, arr, []);
+
+  return {
+    identity: identity.name ?? "unknown",
+    resource: {
+      uptime: resource.uptime ?? "?",
+      version: resource.version ?? "?",
+      cpuLoad: Number(resource["cpu-load"] ?? 0),
+      freeMemory: Number(resource["free-memory"] ?? 0),
+      totalMemory: Number(resource["total-memory"] ?? 0),
+      boardName: resource["board-name"] ?? "?",
+      cpuCount: resource["cpu-count"] ?? "?",
+      architecture: resource["architecture-name"] ?? "?",
+    },
+    routerboard:
+      Object.keys(board).length > 0
+        ? {
+            model: board.model ?? board["board-name"] ?? "?",
+            serialNumber: board["serial-number"] ?? "?",
+            firmware: board["current-firmware"] ?? "?",
+            firmwareType: board["firmware-type"] ?? "?",
+            upgradeAvailable: board["upgrade-firmware"] ?? "",
+          }
+        : null,
+    health,
+    ipAddresses: ip.map((a) => ({
+      address: a.address ?? "?",
+      network: a.network ?? "",
+      interface: a.interface ?? "?",
+      disabled: a.disabled === "true",
+    })),
+    dhcpLeases: leases.map((l) => ({
+      address: l.address ?? l["active-address"] ?? "?",
+      macAddress: l["mac-address"] ?? l["active-mac-address"] ?? "?",
+      hostName: l["host-name"] ?? l.comment ?? "",
+      status: l.status ?? "",
+      server: l.server ?? "",
+      expiresAfter: l["expires-after"] ?? "",
+      lastSeen: l["last-seen"] ?? "",
+      dynamic: l.dynamic === "true",
+      comment: l.comment ?? "",
+    })),
+    interfaces: ifaces.map((i) => ({
+      name: i.name ?? "?",
+      type: i.type ?? "?",
+      running: i.running === "true",
+      rxByte: Number(i["rx-byte"] ?? 0),
+      txByte: Number(i["tx-byte"] ?? 0),
+    })),
+  };
+}

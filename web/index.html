@@ -205,7 +205,22 @@
   dialog::backdrop { background: rgba(2,4,7,.72); backdrop-filter: blur(1.5px); }
   dialog .dhead { display: flex; align-items: center; padding: 13px 18px; border-bottom: 1px solid var(--border2); background: linear-gradient(180deg, #0e151d, #0b1017); }
   dialog .dhead h3 { margin: 0; font-size: 13px; flex: 1; font-family: var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+  dialog.wide { max-width: 1000px; }
   dialog .dbody { padding: 10px 18px 18px; max-height: 78vh; overflow-y: auto; }
+  .pchart { background: #05080b; border: 1px solid var(--border2); border-radius: 4px; padding: 8px; margin-top: 6px; }
+  .pchart svg { display: block; width: 100%; height: auto; }
+  .prange { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+  .prange button { font-size: 11px; padding: 3px 9px; }
+  .prange button.on { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+  .prange select { background: var(--bg); border: 1px solid var(--border2); color: var(--text); border-radius: 3px; padding: 3px 8px; font: inherit; font-size: 12px; }
+  .cmp { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0 2px; }
+  .cmp .c { background: #05080b; border: 1px solid var(--border2); border-radius: 3px; padding: 8px 13px; min-width: 150px; }
+  .cmp .c .lbl { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+  .cmp .c .big { font-size: 17px; font-weight: 600; font-family: var(--mono); font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .cmp .c .delta { font-size: 11px; font-family: var(--mono); }
+  .delta.up { color: var(--red); } .delta.down { color: var(--green); }
+  .leg { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); margin-left: 10px; }
+  .leg i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
   .kv { display: grid; grid-template-columns: 130px 1fr; gap: 5px 12px; padding: 10px 0; }
   .kv dt { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .05em; }
   .kv dd { margin: 0; word-break: break-all; }
@@ -695,6 +710,11 @@
 <dialog id="modal">
   <div class="dhead"><h3 id="mTitle"></h3><button onclick="document.getElementById('modal').close()">Close</button></div>
   <div class="dbody" id="mBody"></div>
+</dialog>
+
+<dialog id="profile" class="wide">
+  <div class="dhead"><h3 id="pTitle"></h3><button onclick="closeProfile()">Close</button></div>
+  <div class="dbody" id="pBody"></div>
 </dialog>
 
 <div id="toast"></div>
@@ -1210,6 +1230,7 @@ function render() {
       <td>${fmtDate(r.lastSeenAt)}</td>
       <td class="actions">
         <button data-act="details" data-ref="${esc(r.id)}">Details</button>
+        ${staged ? "" : `<button data-act="profile" data-ref="${esc(r.id)}">Profile</button>`}
         ${staged ? "" : `<button data-act="live" data-ref="${esc(r.id)}">Live</button>`}
         <button data-act="verify" data-ref="${esc(r.id)}" ${staged || r.state === "revoked" ? "disabled" : ""}>Verify</button>
         ${isAdmin() ? (r.state === "revoked"
@@ -1559,6 +1580,192 @@ function openLive(ref) {
   liveES.onerror = () => { /* auto-reconnects; leave last frame up */ };
 }
 
+/* ---------------- device profile ---------------- */
+let profileState = { ref: null, hours: 24, iface: null, traffic: null };
+function closeProfile() { $("profile").close(); profileState = { ref: null, hours: 24, iface: null, traffic: null }; }
+const RANGES = [{ h: 1, l: "1h" }, { h: 6, l: "6h" }, { h: 24, l: "24h" }, { h: 168, l: "7d" }, { h: 720, l: "30d" }];
+
+async function openProfile(ref) {
+  profileState = { ref, hours: 24, iface: null, traffic: null };
+  $("pTitle").textContent = "Device profile";
+  $("pBody").innerHTML = '<p class="chips">Loading device profile over the tunnel…</p>';
+  $("profile").showModal();
+  let prof;
+  try {
+    prof = await api("/api/routers/" + encodeURIComponent(ref) + "/profile");
+  } catch (e) {
+    $("pBody").innerHTML = `<p class="chips">Could not reach the router: ${esc(e.message)}</p>`;
+    return;
+  }
+  profileState.prof = prof;
+  $("pTitle").textContent = prof.identity + " — profile";
+  renderProfileShell(prof);
+  await loadTraffic();
+}
+
+function renderProfileShell(prof) {
+  const r = prof.resource;
+  const memPct = r.totalMemory ? ((r.totalMemory - r.freeMemory) / r.totalMemory) * 100 : 0;
+  const rb = prof.routerboard;
+  const upgrade = rb && rb.upgradeAvailable && rb.upgradeAvailable !== rb.firmware
+    ? ` <span class="pill revoked" title="firmware upgrade available">upgrade → ${esc(rb.upgradeAvailable)}</span>` : "";
+  const health = (prof.health || []).filter((h) => h.value !== "" && h.value != null);
+  const leases = prof.dhcpLeases || [];
+  const bound = leases.filter((l) => (l.status || "").toLowerCase() === "bound" || l.status === "").length;
+  $("pBody").innerHTML = `
+    <div class="signal">
+      ${signalTile("Uptime", r.uptime)}
+      ${signalTile("CPU", r.cpuLoad + "%", r.cpuLoad)}
+      ${signalTile("Memory", fmtBytes(r.totalMemory - r.freeMemory) + " / " + fmtBytes(r.totalMemory), memPct)}
+      ${signalTile("Board", r.boardName)}
+      ${signalTile("ROS", r.version)}
+      ${rb ? signalTile("Firmware", rb.firmware) : ""}
+    </div>
+    ${upgrade ? `<div class="chips" style="margin-top:4px">${upgrade}</div>` : ""}
+
+    <div class="sub">Traffic</div>
+    <div id="pTraffic"><p class="chips">Loading traffic history…</p></div>
+
+    ${health.length ? `<div class="sub">Health</div><div class="signal">
+      ${health.map((h) => signalTile(h.name, h.value)).join("")}</div>` : ""}
+
+    <div class="sub">DHCP leases <span class="chips">(${bound} active of ${leases.length})</span></div>
+    ${leases.length ? `<div class="tablewrap"><table><thead><tr>
+        <th>Address</th><th>Host</th><th>MAC</th><th>Server</th><th>Status</th><th>Expires</th></tr></thead>
+      <tbody>${leases.map((l) => `<tr>
+        <td class="mono">${esc(l.address)}</td>
+        <td>${esc(l.hostName || "—")}</td>
+        <td class="mono">${esc(l.macAddress)}</td>
+        <td>${esc(l.server || "—")}</td>
+        <td>${l.dynamic ? "" : '<span class="dtype infrastructure" style="margin-right:4px">static</span>'}<span class="dot ${(l.status||"").toLowerCase()==="bound"||!l.status ? "on":"off"}"></span>${esc(l.status || "bound")}</td>
+        <td class="mono">${esc(l.expiresAfter || "—")}</td></tr>`).join("")}</tbody></table></div>`
+      : '<p class="chips">No DHCP leases (this device may not run a DHCP server).</p>'}
+
+    <div class="sub">IP addresses</div>
+    ${(prof.ipAddresses || []).length ? `<div class="tablewrap"><table><thead><tr>
+        <th>Address</th><th>Network</th><th>Interface</th></tr></thead>
+      <tbody>${prof.ipAddresses.map((a) => `<tr>
+        <td class="mono">${esc(a.address)}</td><td class="mono">${esc(a.network || "—")}</td>
+        <td class="mono">${esc(a.interface)}${a.disabled ? ' <span class="chips">disabled</span>' : ""}</td></tr>`).join("")}
+      </tbody></table></div>` : '<p class="chips">No IP addresses reported.</p>'}`;
+}
+
+async function loadTraffic() {
+  const ref = profileState.ref;
+  const box = $("pTraffic");
+  if (box) box.innerHTML = '<p class="chips">Loading traffic history…</p>';
+  try {
+    const t = await api("/api/routers/" + encodeURIComponent(ref) + "/traffic?hours=" + profileState.hours);
+    profileState.traffic = t;
+    if (profileState.iface == null || !t.interfaces.includes(profileState.iface))
+      profileState.iface = t.busiest || t.interfaces[0] || null;
+    renderTraffic();
+  } catch (e) {
+    if (box) box.innerHTML = `<p class="chips">Traffic unavailable: ${esc(e.message)}</p>`;
+  }
+}
+
+function renderTraffic() {
+  const t = profileState.traffic;
+  const box = $("pTraffic");
+  if (!box || !t) return;
+  const ranges = RANGES.map((r) => `<button class="${r.h === profileState.hours ? "on" : ""}" onclick="setProfileRange(${r.h})">${r.l}</button>`).join("");
+  if (!t.interfaces.length) {
+    box.innerHTML = `<div class="prange">${ranges}</div>
+      <p class="chips">No traffic history yet for this window. The sampler records every ${Math.round((t.sampleSeconds||300)/60)} min — the graph fills in as samples accumulate.</p>`;
+    return;
+  }
+  const ifaceSel = `<select onchange="setProfileIface(this.value)">${t.interfaces.map((n) =>
+    `<option value="${esc(n)}" ${n === profileState.iface ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`;
+  const iface = profileState.iface;
+  const cur = t.series[iface] || [];
+  const totals = t.totals[iface] || { rx: 0, tx: 0 };
+  const prev = t.prevTotals[iface] || { rx: 0, tx: 0 };
+  box.innerHTML = `
+    <div class="prange">${ranges}
+      <span class="chips">Interface</span> ${ifaceSel}
+      <span class="leg"><i style="background:var(--green)"></i>download</span>
+      <span class="leg"><i style="background:var(--accent)"></i>upload</span>
+      <span class="leg"><i style="background:#3a4a5a"></i>previous ${labelFor(t.hours)}</span>
+    </div>
+    <div class="cmp">
+      ${cmpTile("Downloaded", totals.rx, prev.rx, "down")}
+      ${cmpTile("Uploaded", totals.tx, prev.tx, "up")}
+      ${cmpTile("Total", totals.rx + totals.tx, prev.rx + prev.tx, "tot")}
+    </div>
+    <div class="pchart">${trafficChartSVG(cur, t.prevSeries ? (t.prevSeries[iface] || []) : [], t)}</div>
+    <div class="chips" style="margin-top:4px">${t.samples} sample(s) in this window · compared with the preceding ${labelFor(t.hours)}.</div>`;
+}
+function labelFor(h) { const r = RANGES.find((x) => x.h === h); return r ? r.l : h + "h"; }
+function cmpTile(label, cur, prevv, dir) {
+  let delta = "";
+  if (prevv > 0) {
+    const pct = ((cur - prevv) / prevv) * 100;
+    const cls = pct >= 0 ? "up" : "down";
+    delta = `<div class="delta ${cls}">${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(0)}% vs prev</div>`;
+  } else if (cur > 0) {
+    delta = `<div class="delta up">new</div>`;
+  } else {
+    delta = `<div class="delta">—</div>`;
+  }
+  return `<div class="c"><div class="lbl">${esc(label)}</div><div class="big">${fmtBytes(cur)}</div>${delta}</div>`;
+}
+
+function setProfileRange(h) { profileState.hours = h; loadTraffic(); }
+function setProfileIface(name) { profileState.iface = name; renderTraffic(); }
+
+function trafficChartSVG(cur, prev, t) {
+  const W = 940, H = 240, PADL = 58, PADR = 12, PADT = 12, PADB = 24;
+  const now = Date.now();
+  const span = t.hours * 3600000;
+  const xMin = now - span, xMax = now;
+  const gapMs = (t.sampleSeconds || 300) * 2.5 * 1000;
+  // previous-period points are shifted forward one window so they overlay.
+  const prevShift = (prev || []).map((p) => ({ at: p.at + span, rx: p.rx, tx: p.tx }));
+  let yMax = 1;
+  for (const arr of [cur, prevShift]) for (const p of arr) yMax = Math.max(yMax, p.rx, p.tx);
+  yMax *= 1.12;
+  const xOf = (at) => PADL + ((at - xMin) / (xMax - xMin)) * (W - PADL - PADR);
+  const yOf = (v) => PADT + (1 - v / yMax) * (H - PADT - PADB);
+  const path = (arr, key) => {
+    let d = "", prevAt = null;
+    for (const p of arr) {
+      if (p.at < xMin) { prevAt = p.at; continue; }
+      const cmd = prevAt == null || p.at - prevAt > gapMs ? "M" : "L";
+      d += `${cmd}${xOf(p.at).toFixed(1)} ${yOf(p[key]).toFixed(1)} `;
+      prevAt = p.at;
+    }
+    return d.trim();
+  };
+  // y gridlines + labels
+  let grid = "";
+  for (let g = 0; g <= 4; g++) {
+    const v = (yMax / 4) * g, y = yOf(v);
+    grid += `<line x1="${PADL}" y1="${y.toFixed(1)}" x2="${W - PADR}" y2="${y.toFixed(1)}" stroke="#12202c"/>`;
+    grid += `<text x="${PADL - 6}" y="${(y + 3).toFixed(1)}" text-anchor="end" fill="#5a6b7a" font-size="10" font-family="monospace">${fmtBps(v)}</text>`;
+  }
+  // x time ticks
+  let xticks = "";
+  const ticks = 5;
+  for (let i = 0; i <= ticks; i++) {
+    const at = xMin + ((xMax - xMin) / ticks) * i, x = xOf(at);
+    const d = new Date(at);
+    const lab = span <= 24 * 3600000
+      ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : (d.getMonth() + 1) + "/" + d.getDate();
+    xticks += `<text x="${x.toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="#5a6b7a" font-size="10" font-family="monospace">${lab}</text>`;
+  }
+  const dPrevRx = path(prevShift, "rx"), dPrevTx = path(prevShift, "tx");
+  const dRx = path(cur, "rx"), dTx = path(cur, "tx");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">
+    ${grid}${xticks}
+    ${dPrevRx ? `<path d="${dPrevRx}" fill="none" stroke="#3a4a5a" stroke-width="1"/>` : ""}
+    ${dPrevTx ? `<path d="${dPrevTx}" fill="none" stroke="#33424f" stroke-width="1" stroke-dasharray="3 2"/>` : ""}
+    ${dRx ? `<path d="${dRx}" fill="none" stroke="var(--green)" stroke-width="1.6"/>` : ""}
+    ${dTx ? `<path d="${dTx}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>` : ""}
+  </svg>`;
+}
+
 /* ---------------- bulk ---------------- */
 function updateBulkInfo() {
   const online = allRouters.filter((r) => r.online).length;
@@ -1817,6 +2024,7 @@ document.addEventListener("click", async (ev) => {
   if (!act) return;
   try {
     if (act === "details") await openDetails(ref);
+    if (act === "profile") await openProfile(ref);
     if (act === "savemeta") await saveMeta(ref);
     if (act === "savemon") await saveMonitoring(ref);
     if (act === "live") await openLive(ref);

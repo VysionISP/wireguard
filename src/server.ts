@@ -22,7 +22,8 @@ import { telegram as realTelegram, type TelegramClient } from "./telegram.js";
 import { interfaceRates, type Sample } from "./stream.js";
 import { TopologyStore, type GroupTopology } from "./topology.js";
 import { CustomerStore } from "./customers.js";
-import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, type FetchLiveFn, type FetchIfacesFn } from "./routeros.js";
+import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn } from "./routeros.js";
+import { MetricsStore, computeTraffic } from "./metrics.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
 import { defaultMonitoring, type RouterRecord, type DeviceType } from "./types.js";
 
@@ -34,6 +35,8 @@ export interface AppDeps {
   fetchInfo?: FetchInfoFn;
   fetchLive?: FetchLiveFn;
   fetchIfaces?: FetchIfacesFn;
+  fetchProfile?: FetchProfileFn;
+  metrics?: MetricsStore;
   backups?: BackupStore;
   alerter?: Alerter;
   tokens?: TokenStore;
@@ -108,6 +111,9 @@ export function buildApp(deps: AppDeps): Express {
   const sftpPut = deps.sftpPut ?? realSftpPut;
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
   const fetchIfaces = deps.fetchIfaces ?? realFetchInterfaces;
+  const fetchProfile = deps.fetchProfile ?? fetchDeviceProfile;
+  const metrics =
+    deps.metrics ?? new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
 
   // Serialises the register critical section so concurrent phone-homes can't
   // both read the same "lowest free IP" or both burn the same one-time token
@@ -964,6 +970,64 @@ export function buildApp(deps: AppDeps): Express {
     } catch (err) {
       res.status(502).json({ error: `router unreachable: ${(err as Error).message}` });
     }
+  });
+
+  // ---- device profile: DHCP leases, IP addresses, health, firmware
+  app.get("/api/routers/:ref/profile", requireTech, async (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    if (router.state === "staged" || router.state === "revoked") {
+      res.status(400).json({ error: "router is not online" });
+      return;
+    }
+    try {
+      res.json(await fetchProfile(router.tunnelIp, router.username, router.password));
+    } catch (err) {
+      res.status(502).json({ error: `router unreachable: ${(err as Error).message}` });
+    }
+  });
+
+  // ---- historical traffic + previous-period comparison (from stored metrics)
+  app.get("/api/routers/:ref/traffic", requireTech, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const hours = Math.min(720, Math.max(1, Number(req.query.hours) || 24));
+    const windowMs = hours * 3600_000;
+    const now = Date.now();
+    const sampleSeconds = config.metrics.sampleSeconds;
+    const exclude = new Set([config.router.wgInterfaceName]);
+    // Pull two windows so we can compare this period against the previous one.
+    const all = metrics.samples(router.serialNumber, now - windowMs * 2);
+    const curr = all.filter((s) => s.at >= now - windowMs);
+    const prev = all.filter((s) => s.at >= now - windowMs * 2 && s.at < now - windowMs);
+    const c = computeTraffic(curr, sampleSeconds, exclude);
+    const p = computeTraffic(prev, sampleSeconds, exclude);
+    let busiest: string | null = null;
+    let best = -1;
+    for (const [name, t] of Object.entries(c.totals)) {
+      const v = t.rx + t.tx;
+      if (v > best) {
+        best = v;
+        busiest = name;
+      }
+    }
+    res.json({
+      hours,
+      sampleSeconds,
+      interfaces: c.interfaces,
+      series: c.series,
+      totals: c.totals,
+      prevSeries: p.series,
+      prevTotals: p.totals,
+      busiest,
+      samples: curr.length,
+    });
   });
 
   // ---- live streaming (Server-Sent Events) -----------------------------

@@ -123,6 +123,18 @@ const configSchema = z.object({
       defaultAlertOnLinkDown: z.boolean().default(true),
     })
     .default({}),
+  /** Time-series sampling for the per-device traffic graph + history. */
+  metrics: z
+    .object({
+      enabled: z.boolean().default(true),
+      /** How often each online device's counters are sampled. */
+      sampleSeconds: z.number().int().min(30).default(300),
+      /** How long samples are kept before pruning. */
+      retentionDays: z.number().int().min(1).default(14),
+    })
+    .default({}),
+  /** Append-only metrics samples (JSONL). */
+  metricsPath: z.string().default("data/metrics.jsonl"),
   /** Active issues (status board). */
   issuesPath: z.string().default("data/issues.json"),
   /** Per-device + global event log (logins, link flaps, on/offline). */

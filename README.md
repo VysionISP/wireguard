@@ -171,6 +171,28 @@ tunnel via REST: uptime, CPU, memory, interface traffic, and — for LTE/5G
 devices like the Chateau — signal metrics (RSRP/RSRQ/SINR, operator, band).
 Handy for diagnosing "internet is slow" without a truck roll.
 
+## Device profile
+
+The **Profile** button on each router opens a full page for that device,
+pulled live over the tunnel:
+
+- **Header** — uptime, CPU, memory, board, ROS + firmware version (with an
+  "upgrade available" flag when the RouterBOARD reports a newer firmware).
+- **Traffic graph** — per-interface throughput over 1h / 6h / 24h / 7d / 30d,
+  drawn from a background sampler that records each online device's counters
+  every few minutes. The **previous period** is overlaid faintly behind the
+  current one, and tiles show total downloaded / uploaded with the percentage
+  change vs. the preceding window. Pick any interface; it defaults to the
+  busiest (usually the uplink). The management tunnel is excluded.
+- **Health** — temperature / voltage / fan sensors where the board exposes them.
+- **DHCP leases** — the device's live lease table (address, host name, MAC,
+  server, bound/waiting status, expiry).
+- **IP addresses** — every address and the interface it sits on.
+
+Traffic history is stored in `data/metrics.jsonl` and pruned to
+`metrics.retentionDays` (default 14). Sampling cadence and retention are set
+under `metrics` in `config.json`.
+
 ## Bulk commands
 
 Admins can run a RouterOS command across the whole fleet (or a selection)
@@ -342,6 +364,8 @@ require the admin role.
 | `GET /api/routers/:ref` | tech | Full details incl. credentials (ref = id, serial or tunnel IP) |
 | `POST /api/routers/:ref/verify` | tech | Handshake + REST reachability check; marks `verified` |
 | `GET /api/routers/:ref/live` | tech | Live stats over the tunnel (system, interfaces, LTE) |
+| `GET /api/routers/:ref/profile` | tech | Live profile: DHCP leases, IP addresses, health, firmware |
+| `GET /api/routers/:ref/traffic?hours=` | tech | Traffic history + previous-period comparison from stored metrics |
 | `PATCH /api/routers/:ref` | tech | Set `label` / `notes` |
 | `GET /api/routers/:ref/backups` / `…/:name` | tech | List / download backup versions |
 | `POST /api/routers/:ref/backup-now` | tech | Trigger an immediate `/export` backup over SSH |
