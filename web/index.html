@@ -173,6 +173,8 @@
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: 0; }
   .dot.on { background: var(--green); box-shadow: 0 0 7px var(--green), 0 0 1px #fff inset; }
   .dot.off { background: #223040; box-shadow: inset 0 0 3px #000; }
+  .dot.warn { background: #ffb020; box-shadow: 0 0 7px #ffb020; animation: dotpulse 1.1s infinite; }
+  @keyframes dotpulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
   .empty { padding: 34px 16px; text-align: center; color: var(--muted); font-family: var(--mono); font-size: 12px; }
 
@@ -813,6 +815,12 @@ function fmtBytes(n) {
   return (n / 1024 ** i).toFixed(i ? 1 : 0) + " " + u[i];
 }
 const online = (r) => r.online ?? (r.handshakeAge != null && r.handshakeAge < 180);
+// Three-state status cell: up (green) / warning (amber, degraded) / down (red-ish).
+function statusCell(r) {
+  if (r.health === "warning") return '<span class="dot warn"></span>degraded';
+  const up = online(r);
+  return `<span class="dot ${up ? "on" : "off"}"></span>${up ? "up" : "down"}`;
+}
 
 /* ---------------- tabs ---------------- */
 function showTab(name) {
@@ -1250,7 +1258,7 @@ function render() {
     const staged = r.state === "staged";
     return `
     <tr>
-      <td>${staged ? '<span class="chips">—</span>' : `<span class="dot ${online(r) ? "on" : "off"}"></span>${online(r) ? "up" : "down"}`}</td>
+      <td>${staged ? '<span class="chips">—</span>' : statusCell(r)}</td>
       <td>${r.label ? esc(r.label) : '<span style="color:var(--muted)">—</span>'}</td>
       <td>${r.customerGroup ? esc(r.customerGroup) : '<span style="color:var(--muted)">—</span>'}</td>
       <td class="mono">${esc(r.serialNumber)}</td>
@@ -1314,6 +1322,7 @@ async function openDetails(ref) {
   $("dBody").innerHTML = `
     <dl class="kv">
       <dt>State</dt><dd><span class="pill ${esc(r.state)}">${esc(r.state)}</span></dd>
+      ${r.health ? `<dt>Health</dt><dd>${r.health === "up" ? '<span class="dot on"></span>up' : r.health === "warning" ? '<span class="dot warn"></span>degraded' : '<span class="dot off"></span>offline'}${r.lastPingOkAt ? ` <span class="chips">last reply ${esc(fmtAge((Date.now() - Date.parse(r.lastPingOkAt)) / 1000))}</span>` : ""}</dd>` : ""}
       <dt>Board</dt><dd>${esc(r.boardName)} (ROS ${esc(r.rosVersion)})</dd>
       <dt>Identity</dt><dd>${esc(r.identity)}</dd>
       <dt>Mgmt IP</dt><dd class="mono">${r.tunnelIp ? esc(r.tunnelIp) : "— (not registered yet)"}</dd>
@@ -2222,7 +2231,7 @@ function startFleetStream() {
     let changed = false;
     for (const r of allRouters) {
       const h = byId.get(r.id);
-      if (h) { r.handshakeAge = h.handshakeAge; r.online = h.online; changed = true; }
+      if (h) { r.handshakeAge = h.handshakeAge; r.online = h.online; r.health = h.health; changed = true; }
     }
     if (changed && curTab() === "fleet") render();
     markLive();

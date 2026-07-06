@@ -68,6 +68,27 @@ const configSchema = z.object({
       offlineAfterSeconds: z.number().int().min(30).default(180),
     })
     .default({}),
+  /**
+   * Active liveness probe: a fast TCP connect to each device over the tunnel,
+   * giving sub-minute detection that WireGuard handshake age (which only
+   * re-handshakes every ~2 min on a healthy link) can't. Drives a three-state
+   * health: up -> warning -> offline.
+   */
+  liveness: z
+    .object({
+      enabled: z.boolean().default(true),
+      /** How often to probe each device. */
+      intervalSeconds: z.number().int().min(2).default(10),
+      /** No successful probe for this long -> "warning" (degraded). */
+      warnAfterSeconds: z.number().int().min(5).default(20),
+      /** No successful probe for this long -> "offline" (opens the issue). */
+      offlineAfterSeconds: z.number().int().min(10).default(60),
+      /** TCP port probed over the tunnel (www/REST is always enabled). */
+      port: z.number().int().min(1).max(65535).default(80),
+      /** Per-probe connect timeout. */
+      timeoutMs: z.number().int().min(200).default(2000),
+    })
+    .default({}),
   /** Opinionated defaults applied to every router at provision time. */
   hardening: z
     .object({

@@ -28,6 +28,17 @@ describe("IssueStore", () => {
     expect(s.list(true).some((i) => i.resolvedAt)).toBe(true);
   });
 
+  it("resolveById clears a port-scoped issue that resolve(serial,type) would miss", () => {
+    const s = new IssueStore(path.join(tempDir(), "issues.json"));
+    s.open("A", "A", "link-down", "warning", "ether1 down", "ether1");
+    // The old status-board bug: resolving by (serial,type) with no ref misses it.
+    expect(s.resolve("A", "link-down")).toBe(false);
+    expect(s.counts().warning).toBe(1);
+    const issue = s.list().find((i) => i.ref === "ether1")!;
+    expect(s.resolveById(issue.id)).toBe(true);
+    expect(s.counts().warning).toBe(0);
+  });
+
   it("persists across reloads and clears by serial", () => {
     const p = path.join(tempDir(), "issues.json");
     const s = new IssueStore(p);

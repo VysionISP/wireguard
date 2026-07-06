@@ -432,13 +432,16 @@ export function buildApp(deps: AppDeps): Express {
     res.json(
       store.list().map(({ password: _password, ...rest }) => {
         const handshakeAge = handshakes[rest.publicKey] ?? null;
+        const handshakeOnline =
+          rest.state !== "revoked" &&
+          handshakeAge !== null &&
+          handshakeAge < config.monitor.offlineAfterSeconds;
         return {
           ...rest,
           handshakeAge,
-          online:
-            rest.state !== "revoked" &&
-            handshakeAge !== null &&
-            handshakeAge < config.monitor.offlineAfterSeconds,
+          // Prefer the active-ping health when the liveness probe is running;
+          // fall back to handshake age otherwise.
+          online: rest.health ? rest.health !== "offline" : handshakeOnline,
         };
       }),
     );
@@ -901,8 +904,10 @@ export function buildApp(deps: AppDeps): Express {
       res.status(404).json({ error: "not found" });
       return;
     }
-    issues.resolve(found.serialNumber, found.type);
-    audit.log(who(req), "issue.resolve", found.serialNumber, found.type);
+    // Resolve by id so a port-scoped issue (with a ref like "ether1") clears —
+    // resolving by (serial,type) alone would miss anything with a ref.
+    issues.resolveById(req.params.id);
+    audit.log(who(req), "issue.resolve", found.serialNumber, `${found.type}${found.ref ? " " + found.ref : ""}`);
     res.json({ ok: true });
   });
 
@@ -1076,10 +1081,12 @@ export function buildApp(deps: AppDeps): Express {
       .filter((r) => r.state !== "staged" && r.state !== "revoked")
       .map((r) => {
         const handshakeAge = hs[r.publicKey] ?? null;
+        const handshakeOnline = handshakeAge !== null && handshakeAge < config.monitor.offlineAfterSeconds;
         return {
           id: r.id,
           handshakeAge,
-          online: handshakeAge !== null && handshakeAge < config.monitor.offlineAfterSeconds,
+          health: r.health ?? null,
+          online: r.health ? r.health !== "offline" : handshakeOnline,
         };
       });
     const frame = `data: ${JSON.stringify({ type: "heartbeat", routers })}\n\n`;
@@ -1110,9 +1117,15 @@ export function buildApp(deps: AppDeps): Express {
     const hs = await wg.latestHandshakes().catch(() => ({}) as Record<string, number | null>);
     const live = store.list().filter((r) => r.state !== "staged" && r.state !== "revoked");
     let online = 0;
+    let warning = 0;
     for (const r of live) {
-      const age = hs[r.publicKey] ?? null;
-      if (age !== null && age < config.monitor.offlineAfterSeconds) online++;
+      if (r.health) {
+        if (r.health === "warning") warning++;
+        if (r.health !== "offline") online++;
+      } else {
+        const age = hs[r.publicKey] ?? null;
+        if (age !== null && age < config.monitor.offlineAfterSeconds) online++;
+      }
     }
     const rank = (s: string) => (s === "critical" ? 0 : 1);
     const open = issues
@@ -1122,7 +1135,7 @@ export function buildApp(deps: AppDeps): Express {
     const frame = `data: ${JSON.stringify({
       type: "noc",
       at: new Date().toISOString(),
-      fleet: { online, offline: live.length - online, total: live.length },
+      fleet: { online, offline: live.length - online, warning, total: live.length },
       counts: issues.counts(),
       issues: open,
       events: events.recent(40),

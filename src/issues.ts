@@ -105,6 +105,16 @@ export class IssueStore {
     return true;
   }
 
+  /** Resolve a specific open issue by its id (matches the exact ref). */
+  resolveById(id: string): boolean {
+    const issue = this.issues.find((i) => i.id === id && !i.resolvedAt);
+    if (!issue) return false;
+    issue.resolvedAt = new Date().toISOString();
+    issue.updatedAt = issue.resolvedAt;
+    this.persist();
+    return true;
+  }
+
   ack(id: string, user: string): boolean {
     const issue = this.issues.find((i) => i.id === id && !i.resolvedAt);
     if (!issue) return false;

@@ -8,6 +8,7 @@ import { renderBootstrap, renderOneLiner } from "./templates.js";
 import { revokeRouter, verifyRouter } from "./actions.js";
 import { syncPeers } from "./sync.js";
 import { startMonitor } from "./monitor.js";
+import { startLiveness } from "./liveness.js";
 import { startDeviceMonitor } from "./devicemonitor.js";
 import { MetricsStore, startMetricsSampler } from "./metrics.js";
 import { Alerter } from "./alerts.js";
@@ -49,7 +50,23 @@ program
     const events = new EventLog(config.eventsPath);
     const metrics = new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
     const app = buildApp({ config, store, wg, alerter, issues, events, settings, metrics });
-    startMonitor(store, wg, config.monitor.intervalSeconds, config.monitor.offlineAfterSeconds, alerter, { issues, events });
+    if (config.liveness.enabled) {
+      // Active ping owns online/warning/offline; run the handshake monitor only
+      // for handshake-age bookkeeping (no offline issues, to avoid duplicates).
+      startLiveness(
+        {
+          store, issues, events, alerter,
+          warnAfterSeconds: config.liveness.warnAfterSeconds,
+          offlineAfterSeconds: config.liveness.offlineAfterSeconds,
+          port: config.liveness.port,
+          timeoutMs: config.liveness.timeoutMs,
+        },
+        config.liveness.intervalSeconds,
+      );
+      console.log(`liveness probe: every ${config.liveness.intervalSeconds}s (warn ${config.liveness.warnAfterSeconds}s, offline ${config.liveness.offlineAfterSeconds}s, tcp/${config.liveness.port})`);
+    } else {
+      startMonitor(store, wg, config.monitor.intervalSeconds, config.monitor.offlineAfterSeconds, alerter, { issues, events });
+    }
     if (config.deviceMonitor.enabled) {
       startDeviceMonitor(
         { store, wg, issues, events, alerter, offlineAfterSeconds: config.monitor.offlineAfterSeconds, managementUsername: config.router.username },

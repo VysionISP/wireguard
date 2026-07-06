@@ -30,7 +30,7 @@
   .fleet { display: flex; gap: 12px; margin-left: 8px; }
   .fleet .pill { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 7px 15px; font-size: 13px; letter-spacing: .08em; color: var(--muted); }
   .fleet .pill b { font-size: 21px; color: var(--text); margin-right: 7px; font-variant-numeric: tabular-nums; }
-  .fleet .pill.ok b { color: var(--ok); } .fleet .pill.bad b { color: var(--crit); }
+  .fleet .pill.ok b { color: var(--ok); } .fleet .pill.bad b { color: var(--crit); } .fleet .pill.warn b { color: var(--warn); }
   header .right { margin-left: auto; text-align: right; }
   #clock { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .06em; }
   .conn { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-top: 2px; }
@@ -98,6 +98,7 @@
   <div class="brand"><span class="dot"></span>KORVIX <span>NOC</span></div>
   <div class="fleet">
     <div class="pill ok"><b id="fOnline">–</b>ONLINE</div>
+    <div class="pill warn hidden" id="pillWarn"><b id="fWarn">0</b>DEGRADED</div>
     <div class="pill bad"><b id="fOffline">–</b>OFFLINE</div>
     <div class="pill"><b id="fTotal">–</b>DEVICES</div>
   </div>
@@ -173,6 +174,9 @@ function render(f) {
   $("fOnline").textContent = f.fleet.online;
   $("fOffline").textContent = f.fleet.offline;
   $("fTotal").textContent = f.fleet.total;
+  const warn = f.fleet.warning || 0;
+  $("fWarn").textContent = warn;
+  $("pillWarn").classList.toggle("hidden", warn === 0);
   const c = f.counts || { critical: 0, warning: 0 };
   const banner = $("banner");
   if (c.critical > 0) { banner.className = "banner crit"; banner.textContent = `${c.critical} CRITICAL${c.warning ? " · " + c.warning + " WARNING" : ""}`; }

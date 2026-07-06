@@ -56,6 +56,14 @@
     "defaultAlertOnLogin": true,
     "defaultAlertOnLinkDown": true
   },
+  "liveness": {
+    "enabled": true,
+    "intervalSeconds": 10,
+    "warnAfterSeconds": 20,
+    "offlineAfterSeconds": 60,
+    "port": 80,
+    "timeoutMs": 2000
+  },
   "metrics": {
     "enabled": true,
     "sampleSeconds": 300,

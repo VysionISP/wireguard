@@ -317,14 +317,31 @@ automatically. If you put the server behind a reverse proxy, make sure it does
 not buffer `text/event-stream` — caddy flushes it automatically; for nginx set
 `proxy_buffering off` on these routes.
 
-## Fleet monitoring
+## Fleet monitoring & liveness
 
-The server checks every router's WireGuard handshake in the background
-(`monitor.intervalSeconds`, default 60 s; offline after
-`monitor.offlineAfterSeconds`, default 180 s). Online routers get their
-last-seen time updated continuously, and every online↔offline transition is
-recorded (bounded history), so flapping links are visible in the dashboard's
-details view without anyone clicking Verify.
+Online/offline is driven by an **active liveness probe**: a fast TCP connect
+to each device over the tunnel every `liveness.intervalSeconds` (default 10 s).
+This is far quicker than WireGuard handshake age, which only re-handshakes
+every ~2 minutes on a healthy link and so can't tell you anything useful
+sub-minute. Each device moves through three states:
+
+- **up** — responded to a recent probe.
+- **warning / degraded** — no reply for `liveness.warnAfterSeconds` (default
+  20 s). Shown as an amber pulsing dot; a "degraded" event is logged, but no
+  issue or hard alert yet (rides out a brief blip).
+- **offline** — no reply for `liveness.offlineAfterSeconds` (default 60 s).
+  Opens the critical **offline** issue, fires the alert, and records the
+  transition.
+
+Recovery clears the issue and (if it had gone fully offline) sends the
+back-online alert. The probe hits `liveness.port` (default 80 / the REST
+service, always enabled) with a `liveness.timeoutMs` connect timeout; a
+connection *refused* still counts as alive (the host answered). Set
+`liveness.enabled: false` to fall back to the legacy handshake-age monitor
+(`monitor.offlineAfterSeconds`, default 180 s).
+
+The fleet table, the details view, the live heartbeat and the NOC wallboard
+all reflect this three-state health.
 
 ## Labels & notes
 

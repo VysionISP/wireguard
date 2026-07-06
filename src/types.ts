@@ -8,6 +8,9 @@ export type RouterState = "staged" | "registered" | "confirmed" | "verified" | "
  */
 export type DeviceType = "customer" | "infrastructure";
 
+/** Active-ping liveness state. */
+export type HealthState = "up" | "warning" | "offline";
+
 export interface RouterRecord {
   /** Stable internal id (uuid). */
   id: string;
@@ -35,6 +38,14 @@ export interface RouterRecord {
   notes?: string;
   /** Last online/offline verdict from the monitor; undefined until first tick. */
   lastOnline?: boolean;
+  /**
+   * Three-state liveness from the active ping monitor:
+   * "up" (reachable), "warning" (missed pings, degrading), "offline" (down).
+   * Undefined until the first probe.
+   */
+  health?: HealthState;
+  /** ISO time of the last successful liveness probe. */
+  lastPingOkAt?: string | null;
   /** Recent online/offline transitions (bounded), newest last. */
   transitions?: Array<{ at: string; online: boolean }>;
   /** When the router last pushed a config backup that we stored or matched. */
