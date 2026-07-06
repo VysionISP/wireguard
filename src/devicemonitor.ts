@@ -27,6 +27,8 @@ export interface DeviceMonitorDeps {
   managementUsername: string;
   fetchInterfaces?: FetchIfacesFn;
   fetchLog?: FetchLogFn;
+  /** Returns true when an active maintenance window mutes this category. */
+  suppressed?: (serial: string, group: string | undefined, category: string) => boolean;
 }
 
 function labelOf(r: RouterRecord): string {
@@ -96,19 +98,30 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
     {
       const rules = new Map(effectivePorts(mon).map((p) => [p.name, p]));
       if (rules.size > 0) {
-        const ifaces = await fetchIfaces(router.tunnelIp, router.username, router.password);
-        state.ifaceBytes ??= {};
-        state.portAlarm ??= {};
-        for (const iface of ifaces) {
-          const rule = rules.get(iface.name);
-          if (!rule || iface.disabled) continue;
-          if (evalPort(router, state, rule, iface, now, tickMs)) dirty = true;
+        const linkMuted = deps.suppressed?.(router.serialNumber, router.customerGroup, "link") ?? false;
+        if (linkMuted) {
+          // Planned maintenance — stay quiet and drop the baseline so we
+          // re-learn cleanly (no spurious alert on the first poll afterwards).
+          state.ifaceRunning = {};
+          state.ifaceBytes = {};
+          state.portAlarm = {};
+          dirty = true;
+        } else {
+          const ifaces = await fetchIfaces(router.tunnelIp, router.username, router.password);
+          state.ifaceBytes ??= {};
+          state.portAlarm ??= {};
+          for (const iface of ifaces) {
+            const rule = rules.get(iface.name);
+            if (!rule || iface.disabled) continue;
+            if (evalPort(router, state, rule, iface, now, tickMs)) dirty = true;
+          }
         }
       }
     }
 
     // ---- logins
     if (mon.alertOnLogin) {
+      const loginMuted = deps.suppressed?.(router.serialNumber, router.customerGroup, "login") ?? false;
       const log = await fetchLog(router.tunnelIp, router.username, router.password);
       const prevSeen = new Set(state.seenLogins);
       // Each login log line, keyed by time+message so it's a stable per-entry
@@ -119,7 +132,7 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
         const info = loginInfo(entry, deps.managementUsername);
         if (info) entries.push({ key: `${entry.time}|${info.summary}`, msg: info.summary });
       }
-      if (state.initialised) {
+      if (state.initialised && !loginMuted) {
         // Collapse the burst of identical lines Winbox writes for ONE login
         // (same message within this poll) to a single alert, while still
         // recording every entry key below so we don't re-alert next poll.

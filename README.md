@@ -345,6 +345,24 @@ all reflect this three-state health. On the NOC, degraded devices show as amber
 cards alongside the faults, and a **new critical fault plays an alert sound**
 (click the 🔊 button once to satisfy the browser's audio-gesture rule).
 
+## Maintenance windows
+
+Planned work shouldn't page anyone. Under **Settings → Maintenance** you can
+schedule a window scoped to the **whole fleet**, a **single device**, or a
+**customer**, for a start/end time, and choose which alert categories to mute
+(offline/degraded, port link & traffic, internal hosts, logins — or all of
+them). While a window is active:
+
+- No issues, alerts or events are raised for the covered devices/categories —
+  monitoring still tracks real state, it just stays quiet.
+- The **NOC wallboard** shows a "🔧 MAINTENANCE — … — alerts suppressed" bar
+  and a MAINT pill, and hides the covered faults so the board stays calm.
+- The fleet table marks the device with a 🔧 badge until the window ends.
+- The downtime is excluded from SLA reporting (planned, not an outage).
+
+Windows auto-expire; there's a Delete button and quick 1h/3h/8h presets.
+Stored in `maintenancePath` (`data/maintenance.json`).
+
 ## Monitoring internal LAN devices
 
 You can ping-monitor devices *behind* a router — a DHCP client, camera, AP or
@@ -437,6 +455,8 @@ require the admin role.
 | `GET /api/routers/:ref/live` | tech | Live stats over the tunnel (system, interfaces, LTE) |
 | `GET /api/routers/:ref/profile` | tech | Live profile: DHCP leases, IP addresses, health, firmware |
 | `GET /api/routers/:ref/traffic?hours=` | tech | Traffic history + previous-period comparison from stored metrics |
+| `GET/POST /api/maintenance` | tech / admin | List / schedule maintenance windows |
+| `DELETE /api/maintenance/:id` | admin | Cancel a maintenance window |
 | `POST /api/routers/:ref/ping` | tech | One-off ping test from the router to a LAN address |
 | `GET/POST /api/routers/:ref/hosts` | tech | List / add monitored internal ping targets |
 | `PATCH/DELETE /api/hosts/:id` | tech | Toggle/rename / remove a monitored host |

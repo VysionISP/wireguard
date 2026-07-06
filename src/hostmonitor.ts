@@ -17,6 +17,8 @@ export interface HostMonitorDeps {
   pingCount: number;
   /** Injectable for tests; defaults to the real RouterOS /ping. */
   ping?: FetchPingFn;
+  /** Returns true when an active maintenance window mutes this category. */
+  suppressed?: (serial: string, group: string | undefined, category: string) => boolean;
 }
 
 function routerLabel(r: RouterRecord): string {
@@ -85,6 +87,13 @@ export async function hostMonitorTick(deps: HostMonitorDeps): Promise<{ checked:
 
     const prev = host.state;
     host.state = next;
+    // Under a maintenance window covering the router, keep state fresh but
+    // don't raise host-down issues/alerts (and clear any lingering one).
+    if (deps.suppressed?.(router.serialNumber, router.customerGroup, "host")) {
+      if (next !== "offline") deps.issues.resolve(router.serialNumber, "host-down", `host:${host.address}`);
+      deps.hosts.save(host);
+      return;
+    }
     if (prev !== undefined && prev !== next) transition(router, host, prev, next, now);
     deps.hosts.save(host);
   }

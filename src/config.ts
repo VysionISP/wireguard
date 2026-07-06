@@ -175,6 +175,8 @@ const configSchema = z.object({
     .default({}),
   /** Monitored internal hosts (ping targets behind routers). */
   hostsPath: z.string().default("data/hosts.json"),
+  /** Planned maintenance windows (alert suppression). */
+  maintenancePath: z.string().default("data/maintenance.json"),
   /** Active issues (status board). */
   issuesPath: z.string().default("data/issues.json"),
   /** Per-device + global event log (logins, link flaps, on/offline). */

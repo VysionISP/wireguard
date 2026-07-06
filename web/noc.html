@@ -30,7 +30,8 @@
   .fleet { display: flex; gap: 12px; margin-left: 8px; }
   .fleet .pill { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 7px 15px; font-size: 13px; letter-spacing: .08em; color: var(--muted); }
   .fleet .pill b { font-size: 21px; color: var(--text); margin-right: 7px; font-variant-numeric: tabular-nums; }
-  .fleet .pill.ok b { color: var(--ok); } .fleet .pill.bad b { color: var(--crit); } .fleet .pill.warn b { color: var(--warn); }
+  .fleet .pill.ok b { color: var(--ok); } .fleet .pill.bad b { color: var(--crit); } .fleet .pill.warn b { color: var(--warn); } .fleet .pill.maint b { color: var(--accent); }
+  .maintbar { flex: 0 0 auto; text-align: center; font-size: 13px; letter-spacing: .08em; padding: 6px; background: #0a1620; color: var(--accent); border-bottom: 1px solid #14303a; }
   header .right { margin-left: auto; text-align: right; }
   #clock { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .06em; }
   .conn { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-top: 2px; }
@@ -106,6 +107,7 @@
   <div class="fleet">
     <div class="pill ok"><b id="fOnline">–</b>ONLINE</div>
     <div class="pill warn hidden" id="pillWarn"><b id="fWarn">0</b>DEGRADED</div>
+    <div class="pill maint hidden" id="pillMaint"><b id="fMaint">0</b>MAINT</div>
     <div class="pill bad"><b id="fOffline">–</b>OFFLINE</div>
     <div class="pill"><b id="fTotal">–</b>DEVICES</div>
   </div>
@@ -117,6 +119,7 @@
 </header>
 
 <div id="banner" class="banner ok">— — —</div>
+<div id="maintbar" class="maintbar hidden"></div>
 
 <main>
   <section class="faults">
@@ -226,6 +229,14 @@ function render(f) {
   const warn = f.fleet.warning || 0;
   $("fWarn").textContent = warn;
   $("pillWarn").classList.toggle("hidden", warn === 0);
+  const maint = f.maintenance || [];
+  $("fMaint").textContent = maint.length;
+  $("pillMaint").classList.toggle("hidden", maint.length === 0);
+  const mb = $("maintbar");
+  if (maint.length) {
+    mb.classList.remove("hidden");
+    mb.textContent = "🔧 MAINTENANCE — " + maint.map((m) => (m.scope || "fleet") + (m.note ? " (" + m.note + ")" : "")).join(" · ") + " — alerts suppressed";
+  } else mb.classList.add("hidden");
   const c = f.counts || { critical: 0, warning: 0 };
   const banner = $("banner");
   if (c.critical > 0) { banner.className = "banner crit"; banner.textContent = `${c.critical} CRITICAL${c.warning ? " · " + c.warning + " WARNING" : ""}`; }

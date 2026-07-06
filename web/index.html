@@ -562,6 +562,7 @@
       <button data-sub="users">Users</button>
       <button data-sub="tokens">Bootstrap tokens</button>
       <button data-sub="notify">Notifications</button>
+      <button data-sub="maint">Maintenance</button>
     </nav>
 
     <!-- CUSTOMERS -->
@@ -698,6 +699,56 @@
         </div>
       </div>
     </div>
+
+    <!-- MAINTENANCE -->
+    <div class="subsec hidden" id="set-maint">
+      <div class="panel">
+        <h2>Schedule maintenance</h2>
+        <div class="pad">
+          <div class="row2">
+            <div class="field"><label>Scope</label>
+              <select id="mwScope">
+                <option value="all">Whole fleet</option>
+                <option value="device">A device</option>
+                <option value="customer">A customer</option>
+              </select>
+            </div>
+            <div class="field" id="mwValueWrap" style="flex:1;min-width:200px;display:none">
+              <label id="mwValueLabel">Device serial</label>
+              <input id="mwValue" list="mwValueList" placeholder="pick or type">
+              <datalist id="mwValueList"></datalist>
+            </div>
+          </div>
+          <div class="row2" style="margin-top:8px">
+            <div class="field"><label>Starts</label><input id="mwStart" type="datetime-local"></div>
+            <div class="field"><label>Ends</label><input id="mwEnd" type="datetime-local"></div>
+          </div>
+          <div class="field" style="margin-top:8px">
+            <label>Suppress <span class="chips">(none ticked = suppress everything)</span></label>
+            <div class="chips" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px">
+              <label><input type="checkbox" class="mwCat" value="offline"> Offline / degraded</label>
+              <label><input type="checkbox" class="mwCat" value="link"> Port link &amp; traffic</label>
+              <label><input type="checkbox" class="mwCat" value="host"> Internal hosts</label>
+              <label><input type="checkbox" class="mwCat" value="login"> Logins</label>
+            </div>
+          </div>
+          <div class="field" style="margin-top:8px"><label>Note</label><input id="mwNote" placeholder="e.g. tower power upgrade"></div>
+          <div class="row2" style="margin-top:10px"><button class="primary" id="mwSave">Schedule window</button>
+            <span class="chips">Quick: <button class="linkish" data-mwquick="60">next 1h</button> · <button class="linkish" data-mwquick="180">3h</button> · <button class="linkish" data-mwquick="480">8h</button></span>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Maintenance windows</h2>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Status</th><th>Scope</th><th>Window</th><th>Suppresses</th><th>Note</th><th></th></tr></thead>
+            <tbody id="mwRows"></tbody>
+          </table>
+          <div class="empty" id="mwEmpty">No maintenance windows scheduled.</div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- AUDIT -->
@@ -819,9 +870,10 @@ function fmtBytes(n) {
 const online = (r) => r.online ?? (r.handshakeAge != null && r.handshakeAge < 180);
 // Three-state status cell: up (green) / warning (amber, degraded) / down (red-ish).
 function statusCell(r) {
-  if (r.health === "warning") return '<span class="dot warn"></span>degraded';
   const up = online(r);
-  return `<span class="dot ${up ? "on" : "off"}"></span>${up ? "up" : "down"}`;
+  const base = r.health === "warning" ? '<span class="dot warn"></span>degraded' : `<span class="dot ${up ? "on" : "off"}"></span>${up ? "up" : "down"}`;
+  if (r.maintenanceUntil && Date.parse(r.maintenanceUntil) > Date.now()) return base + ' <span class="pill confirmed" title="alerts suppressed until ' + esc(fmtDate(r.maintenanceUntil)) + '">🔧</span>';
+  return base;
 }
 
 /* ---------------- tabs ---------------- */
@@ -851,6 +903,7 @@ function showSubTab(sub) {
   if (sub === "users") loadUsers();
   if (sub === "tokens") loadTokens();
   if (sub === "notify") loadSettings();
+  if (sub === "maint") loadMaintenance();
 }
 
 /* ---------------- customers ---------------- */
@@ -2170,6 +2223,66 @@ async function saveTelegram() {
   } catch (e) { toast(e.message); }
 }
 
+/* ---------------- maintenance windows ---------------- */
+function pad2(n) { return String(n).padStart(2, "0"); }
+function toLocalInput(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+async function loadMaintenance() {
+  // populate scope value datalist + wire scope select
+  const [list, routers, custs] = await Promise.all([
+    api("/api/maintenance"),
+    api("/api/routers").catch(() => []),
+    api("/api/customers").catch(() => []),
+  ]);
+  window._mwRouters = routers; window._mwCusts = custs;
+  onMwScopeChange();
+  if (!$("mwStart").value) { const now = new Date(); $("mwStart").value = toLocalInput(now); $("mwEnd").value = toLocalInput(new Date(now.getTime() + 60 * 60000)); }
+  const now = Date.now();
+  $("mwEmpty").classList.toggle("hidden", list.length > 0);
+  $("mwRows").innerHTML = list.map((w) => {
+    const s = Date.parse(w.startsAt), e = Date.parse(w.endsAt);
+    const status = now < s ? '<span class="pill verified">scheduled</span>' : now < e ? '<span class="pill confirmed">active</span>' : '<span class="pill revoked">ended</span>';
+    const scope = w.scopeKind === "all" ? "Whole fleet" : `${w.scopeKind}: ${esc(w.scopeValue || "")}`;
+    const cats = w.categories && w.categories.length ? w.categories.join(", ") : "everything";
+    return `<tr><td>${status}</td><td>${esc(scope)}</td>
+      <td class="mono">${esc(fmtDate(w.startsAt))} → ${esc(fmtDate(w.endsAt))}</td>
+      <td>${esc(cats)}</td><td>${esc(w.note || "—")}</td>
+      <td class="actions"><button class="danger" data-mwdel="${esc(w.id)}">Delete</button></td></tr>`;
+  }).join("");
+}
+function onMwScopeChange() {
+  const kind = $("mwScope").value;
+  $("mwValueWrap").style.display = kind === "all" ? "none" : "";
+  const dl = $("mwValueList");
+  if (kind === "device") {
+    $("mwValueLabel").textContent = "Device (serial or label)";
+    dl.innerHTML = (window._mwRouters || []).map((r) => `<option value="${esc(r.serialNumber)}">${esc(r.label || r.identity || "")}</option>`).join("");
+  } else if (kind === "customer") {
+    $("mwValueLabel").textContent = "Customer";
+    dl.innerHTML = (window._mwCusts || []).map((c) => `<option value="${esc(c.name)}"></option>`).join("");
+  }
+}
+async function saveMaintenance() {
+  const kind = $("mwScope").value;
+  const value = $("mwValue").value.trim();
+  if (kind !== "all" && !value) return toast("Pick a " + kind);
+  const start = $("mwStart").value, end = $("mwEnd").value;
+  if (!start || !end) return toast("Set start and end times");
+  const categories = [...document.querySelectorAll(".mwCat:checked")].map((c) => c.value);
+  try {
+    await api("/api/maintenance", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scopeKind: kind, scopeValue: kind === "all" ? undefined : value,
+        startsAt: new Date(start).toISOString(), endsAt: new Date(end).toISOString(),
+        categories, note: $("mwNote").value.trim(),
+      }),
+    });
+    toast("Maintenance window scheduled");
+    $("mwNote").value = "";
+    loadMaintenance();
+  } catch (e) { toast(e.message); }
+}
+
 /* ---------------- audit ---------------- */
 async function loadAudit() {
   const list = await api("/api/audit");
@@ -2203,6 +2316,8 @@ document.addEventListener("click", async (ev) => {
   if (btn.id === "pcRemove") { portState.rules.delete(btn.dataset.port); $("portcfg").close(); renderPortMap(portState.ifaces || []); try { await persistPorts(); toast("Port no longer monitored"); } catch (e) { toast("Save failed: " + e.message); } return; }
   const d = btn.dataset;
   if (d.copy != null) return copy(d.copy);
+  if (d.mwquick != null) { const now = new Date(); $("mwStart").value = toLocalInput(now); $("mwEnd").value = toLocalInput(new Date(now.getTime() + Number(d.mwquick) * 60000)); return; }
+  if (d.mwdel != null) { if (confirm("Delete this maintenance window?")) { await api("/api/maintenance/" + encodeURIComponent(d.mwdel), { method: "DELETE" }).catch((e) => toast(e.message)); loadMaintenance(); } return; }
   if (d.hostadd != null) return addMonitoredHost(d.hostadd, d.hostname, d.hostmac);
   if (d.hostdel != null) return removeMonitoredHost(d.hostdel);
   if (d.view != null) return viewBackup(d.ref, d.serial, d.view, d.prev).catch((e) => toast(e.message));
@@ -2378,6 +2493,8 @@ $("tkBtn").addEventListener("click", () => createToken().catch((e) => toast(e.me
 $("usBtn").addEventListener("click", addUser);
 $("auditReload").addEventListener("click", () => loadAudit().catch((e) => toast(e.message)));
 for (const b of document.querySelectorAll("nav.subtabs button")) b.addEventListener("click", () => showSubTab(b.dataset.sub));
+$("mwScope").addEventListener("change", onMwScopeChange);
+$("mwSave").addEventListener("click", saveMaintenance);
 $("gSave").addEventListener("click", saveGeneral);
 $("cSave").addEventListener("click", saveCustomer);
 $("cClear").addEventListener("click", clearCustForm);

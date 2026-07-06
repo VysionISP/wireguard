@@ -25,6 +25,7 @@ import { CustomerStore } from "./customers.js";
 import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, fetchPing, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn, type FetchPingFn } from "./routeros.js";
 import { MetricsStore, computeTraffic } from "./metrics.js";
 import { HostStore } from "./hosts.js";
+import { MaintenanceStore, MAINT_CATEGORIES, maintCategory, type MaintCategory } from "./maintenance.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
 import { defaultMonitoring, effectivePorts, type RouterRecord, type DeviceType } from "./types.js";
 
@@ -40,6 +41,7 @@ export interface AppDeps {
   fetchPing?: FetchPingFn;
   metrics?: MetricsStore;
   hosts?: HostStore;
+  maintenance?: MaintenanceStore;
   backups?: BackupStore;
   alerter?: Alerter;
   tokens?: TokenStore;
@@ -120,6 +122,7 @@ export function buildApp(deps: AppDeps): Express {
   const metrics =
     deps.metrics ?? new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
   const hosts = deps.hosts ?? new HostStore(config.hostsPath);
+  const maintenance = deps.maintenance ?? new MaintenanceStore(config.maintenancePath);
 
   // Serialises the register critical section so concurrent phone-homes can't
   // both read the same "lowest free IP" or both burn the same one-time token
@@ -441,12 +444,14 @@ export function buildApp(deps: AppDeps): Express {
           rest.state !== "revoked" &&
           handshakeAge !== null &&
           handshakeAge < config.monitor.offlineAfterSeconds;
+        const win = maintenance.activeForRouter(rest.serialNumber, rest.customerGroup);
         return {
           ...rest,
           handshakeAge,
           // Prefer the active-ping health when the liveness probe is running;
           // fall back to handshake age otherwise.
           online: rest.health ? rest.health !== "offline" : handshakeOnline,
+          maintenanceUntil: win ? win.endsAt : null,
         };
       }),
     );
@@ -1061,6 +1066,56 @@ export function buildApp(deps: AppDeps): Express {
     });
   });
 
+  // ---- planned maintenance windows (alert suppression) -----------------
+  app.get("/api/maintenance", requireTech, (_req: Request, res: Response) => {
+    res.json(maintenance.list());
+  });
+  const maintSchema = z.object({
+    scopeKind: z.enum(["all", "device", "customer"]),
+    scopeValue: z.string().max(120).optional(),
+    startsAt: z.string(),
+    endsAt: z.string(),
+    categories: z.array(z.enum(MAINT_CATEGORIES)).default([]),
+    note: z.string().max(300).default(""),
+  });
+  app.post("/api/maintenance", requireAdmin, (req: Request, res: Response) => {
+    const parsed = maintSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join("; ") });
+      return;
+    }
+    const p = parsed.data;
+    const start = Date.parse(p.startsAt);
+    const end = Date.parse(p.endsAt);
+    if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+      res.status(400).json({ error: "end must be after start" });
+      return;
+    }
+    if ((p.scopeKind === "device" || p.scopeKind === "customer") && !p.scopeValue) {
+      res.status(400).json({ error: "scopeValue required for device/customer scope" });
+      return;
+    }
+    const win = maintenance.add({
+      scopeKind: p.scopeKind,
+      scopeValue: p.scopeValue,
+      startsAt: new Date(start).toISOString(),
+      endsAt: new Date(end).toISOString(),
+      categories: p.categories,
+      note: p.note,
+      createdBy: who(req),
+    });
+    audit.log(who(req), "maintenance.add", `${p.scopeKind}:${p.scopeValue ?? "*"}`, `${win.startsAt}→${win.endsAt}`);
+    res.status(201).json(win);
+  });
+  app.delete("/api/maintenance/:id", requireAdmin, (req: Request, res: Response) => {
+    if (!maintenance.remove(req.params.id)) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    audit.log(who(req), "maintenance.remove", req.params.id.slice(0, 8));
+    res.json({ ok: true });
+  });
+
   // ---- one-off ping test: ask the router to ping any address on its LAN
   app.post("/api/routers/:ref/ping", requireTech, async (req: Request, res: Response) => {
     const router = store.find(req.params.ref);
@@ -1230,18 +1285,31 @@ export function buildApp(deps: AppDeps): Express {
         if (age !== null && age < config.monitor.offlineAfterSeconds) online++;
       }
     }
+    const groupOf = new Map(store.list().map((r) => [r.serialNumber, r.customerGroup]));
     const rank = (s: string) => (s === "critical" ? 0 : 1);
+    // Hide issues whose device+category is under an active maintenance window.
     const open = issues
       .list(false)
-      .slice()
+      .filter((i) => !maintenance.suppressed(i.serialNumber, groupOf.get(i.serialNumber), maintCategory(i.type)))
       .sort((a, b) => rank(a.severity) - rank(b.severity) || b.openedAt.localeCompare(a.openedAt));
+    const critical = open.filter((i) => i.severity === "critical").length;
+    const warning = open.filter((i) => i.severity !== "critical").length;
+    const maint = maintenance.active().map((w) => ({
+      id: w.id,
+      scope: w.scopeKind === "all" ? "whole fleet" : w.scopeValue,
+      scopeKind: w.scopeKind,
+      endsAt: w.endsAt,
+      note: w.note,
+    }));
+    const degradedShown = degraded.filter((d) => !maintenance.suppressed(d.serialNumber, groupOf.get(d.serialNumber), "offline"));
     const frame = `data: ${JSON.stringify({
       type: "noc",
       at: new Date().toISOString(),
-      fleet: { online, offline: live.length - online, warning: degraded.length, total: live.length },
-      counts: issues.counts(),
+      fleet: { online, offline: live.length - online, warning: degradedShown.length, total: live.length, maintenance: maint.length },
+      counts: { critical, warning, unacked: open.filter((i) => !i.ackedAt).length },
       issues: open,
-      degraded,
+      degraded: degradedShown,
+      maintenance: maint,
       events: events.recent(40),
     })}\n\n`;
     for (const c of nocClients) c.write(frame);

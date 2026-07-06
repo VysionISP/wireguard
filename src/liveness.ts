@@ -51,6 +51,8 @@ export interface LivenessDeps {
   timeoutMs: number;
   /** Injectable for tests; defaults to a real TCP connect. */
   ping?: PingFn;
+  /** Returns true when an active maintenance window mutes this category. */
+  suppressed?: (serial: string, group: string | undefined, category: string) => boolean;
 }
 
 function labelOf(r: RouterRecord): string {
@@ -124,11 +126,19 @@ export async function livenessTick(deps: LivenessDeps): Promise<{ up: number; wa
     const wasOffline = prev === "offline";
     const isOffline = next === "offline";
     const online = next !== "offline";
+    // Under a maintenance window the state still updates, but we don't raise
+    // issues/alerts/events — no pages for planned work.
+    const muted = Boolean(deps.suppressed?.(router.serialNumber, router.customerGroup, "offline"));
 
     if (router.lastOnline !== online) {
       router.lastOnline = online;
       router.transitions = [...(router.transitions ?? []), { at, online }].slice(-MAX_TRANSITIONS);
       router.updatedAt = at;
+    }
+    if (muted) {
+      // Still clear any lingering offline issue so the board is clean.
+      if (online) deps.issues.resolve(router.serialNumber, "offline");
+      return;
     }
 
     if (next === "warning") {
