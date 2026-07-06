@@ -141,7 +141,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /* ---- token: ?token=… (persisted + stripped) or localStorage ---- */
 function getToken() {
@@ -315,8 +315,17 @@ function connect(token) {
   };
   es.onerror = () => setConn("down", "reconnecting…");
 }
-// Watchdog: flag a stale feed even if the socket looks open.
-setInterval(() => { if (lastFrame && Date.now() - lastFrame > 12000) setConn("down", "no data — reconnecting…"); }, 3000);
+// Watchdog: a half-open socket (NAT/LB timeout on a long-lived wallboard) can
+// look "open" so onerror never fires and the feed goes silently stale. If no
+// frame has arrived for a while, force a genuine reconnect.
+setInterval(() => {
+  if (lastFrame && Date.now() - lastFrame > 15000) {
+    setConn("down", "no data — reconnecting…");
+    lastFrame = 0;
+    const token = getToken();
+    if (token) connect(token);
+  }
+}, 3000);
 
 function start() {
   updateSoundBtn();

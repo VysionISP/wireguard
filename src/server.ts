@@ -77,7 +77,8 @@ const WEB_STATUS = fileURLToPath(new URL("../web/status.html", import.meta.url))
 const registerSchema = z.object({
   token: z.string(),
   publicKey: z.string().refine(isValidWgKey, "not a valid WireGuard public key"),
-  serialNumber: z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/, "invalid serial number"),
+  // Kept in sync with BackupStore.SERIAL_SAFE (no dot) so backups always work.
+  serialNumber: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "invalid serial number"),
   boardName: z.string().max(128).default("unknown"),
   rosVersion: z.string().max(128).default("unknown"),
   identity: z.string().max(128).default("MikroTik"),
@@ -155,6 +156,7 @@ export function buildApp(deps: AppDeps): Express {
    * serial that used them, so confirm/backup calls keep working.
    */
   function provisioningAuth(candidate: string, serial: string | null): "master" | "one-time" | null {
+    if (!candidate) return null; // fail closed even if a secret is misconfigured empty
     if (
       config.auth.allowMasterProvisioningToken &&
       tokenEquals(candidate, config.auth.provisioningToken)
@@ -1597,7 +1599,9 @@ export function buildApp(deps: AppDeps): Express {
         hosts: hosts
           .forRouter(r.serialNumber)
           .filter((h) => h.enabled)
-          .map((h) => ({ label: h.name || h.address, state: hostState(h.state) })),
+          // Public page: never leak the internal LAN IP — fall back to a
+          // generic label, not the address.
+          .map((h) => ({ label: h.name || "Equipment", state: hostState(h.state) })),
       };
     });
     const serials = new Set(routers.map((r) => r.serialNumber));

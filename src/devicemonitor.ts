@@ -144,17 +144,25 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
           alerter.custom(router, `🔑 ${labelOf(router)}: ${e.msg}`, "login").catch(() => {});
         }
       }
-      state.seenLogins = entries.map((e) => e.key).slice(-MAX_SEEN_LOGINS);
-      dirty = true;
+      // Only persist when the set of seen logins actually changed — the raw
+      // list is otherwise reassigned identically every poll and would rewrite
+      // the whole inventory file each 30s tick.
+      const nextSeen = entries.map((e) => e.key).slice(-MAX_SEEN_LOGINS);
+      if (nextSeen.length !== state.seenLogins.length || nextSeen.some((k, i) => k !== state.seenLogins[i])) {
+        state.seenLogins = nextSeen;
+        dirty = true;
+      }
     }
 
     if (!state.initialised) {
       state.initialised = true;
       dirty = true;
     }
+    // lastSeenAt is kept fresh in memory every poll; it only rides to disk when
+    // something durable (a transition, alarm latch or new login) changed.
+    router.lastSeenAt = now;
     if (dirty) {
-      router.lastSeenAt = now;
-      store.save(router);
+      store.saveExisting(router);
     }
   }
 
@@ -221,35 +229,40 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
           bps = ((drx + dtx) * 8) / dt;
         }
       }
+      // Counters change every poll — keep them in memory but don't force a disk
+      // write for that alone; only an alarm latch change below marks dirty.
       state.ifaceBytes![name] = { rx: iface.rxByte, tx: iface.txByte, at: tickMs };
-      dirty = true;
       if (bps !== null) {
         // High: fire when crossing above; clear with 10% hysteresis.
         if (rule.highBps) {
           if (!alarm.high && bps > rule.highBps) {
             alarm.high = true;
+            dirty = true;
             const msg = `Port ${name} traffic ${fmtBps(bps)} above threshold ${fmtBps(rule.highBps)}`;
             events.add({ at: now, serialNumber: router.serialNumber, label, type: "traffic-high", severity: "warning", message: msg });
             issues.open(router.serialNumber, label, "traffic-high", "warning", msg, name);
             alerter.custom(router, `🔺 ${label}: ${msg}`, "traffic-high", `trafhigh:${router.serialNumber}:${name}`).catch(() => {});
           } else if (alarm.high && bps < rule.highBps * 0.9) {
             alarm.high = false;
+            dirty = true;
             issues.resolve(router.serialNumber, "traffic-high", name);
-            alerter.custom(router, `✅ ${label}: port ${name} traffic back below ${fmtBps(rule.highBps)}`, "traffic-high").catch(() => {});
+            alerter.custom(router, `✅ ${label}: port ${name} traffic back below ${fmtBps(rule.highBps)}`, "traffic-high", `trafhigh:${router.serialNumber}:${name}`).catch(() => {});
           }
         }
         // Low: only meaningful while the link is up.
         if (rule.lowBps) {
           if (!alarm.low && iface.running && bps < rule.lowBps) {
             alarm.low = true;
+            dirty = true;
             const msg = `Port ${name} traffic ${fmtBps(bps)} below threshold ${fmtBps(rule.lowBps)}`;
             events.add({ at: now, serialNumber: router.serialNumber, label, type: "traffic-low", severity: "warning", message: msg });
             issues.open(router.serialNumber, label, "traffic-low", "warning", msg, name);
             alerter.custom(router, `🔻 ${label}: ${msg}`, "traffic-low", `traflow:${router.serialNumber}:${name}`).catch(() => {});
           } else if (alarm.low && (!iface.running || bps > rule.lowBps * 1.1)) {
             alarm.low = false;
+            dirty = true;
             issues.resolve(router.serialNumber, "traffic-low", name);
-            alerter.custom(router, `✅ ${label}: port ${name} traffic back above ${fmtBps(rule.lowBps)}`, "traffic-low").catch(() => {});
+            alerter.custom(router, `✅ ${label}: port ${name} traffic back above ${fmtBps(rule.lowBps)}`, "traffic-low", `traflow:${router.serialNumber}:${name}`).catch(() => {});
           }
         }
       }
@@ -259,9 +272,19 @@ export async function deviceMonitorTick(deps: DeviceMonitorDeps): Promise<{ poll
 }
 
 export function startDeviceMonitor(deps: DeviceMonitorDeps, intervalSeconds: number): () => void {
-  const timer = setInterval(() => {
-    deviceMonitorTick(deps).catch((err) => console.error(`device-monitor: ${(err as Error).message}`));
-  }, intervalSeconds * 1000);
+  let busy = false;
+  const run = async (): Promise<void> => {
+    if (busy) return; // don't overlap ticks (slow REST calls can exceed interval)
+    busy = true;
+    try {
+      await deviceMonitorTick(deps);
+    } catch (err) {
+      console.error(`device-monitor: ${(err as Error).message}`);
+    } finally {
+      busy = false;
+    }
+  };
+  const timer = setInterval(() => void run(), intervalSeconds * 1000);
   timer.unref();
   return () => clearInterval(timer);
 }

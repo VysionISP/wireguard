@@ -66,6 +66,8 @@ program
       audit: new AuditLog(config.auditPath),
       cfg: config.alerts,
       webhookUrl: config.alerts.webhookUrl,
+      suppressed,
+      groupOf: (serial) => store.findBySerial(serial)?.customerGroup,
     });
     const app = buildApp({
       config, store, wg, alerter, issues, events, settings, metrics, hosts, maintenance, outages,

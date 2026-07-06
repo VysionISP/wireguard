@@ -74,7 +74,7 @@
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const token = location.pathname.split("/").pop();
 function since(iso) {
   const d = (Date.now() - Date.parse(iso)) / 1000;
@@ -103,17 +103,18 @@ async function load() {
     m.textContent = "🔧 Planned maintenance in progress" + (r.maintenance[0].note ? " — " + r.maintenance[0].note : "");
   } else m.classList.add("hidden");
   $("devices").innerHTML = (r.devices || []).map((d) => {
-    const sla = d.slaTarget != null
-      ? `<span class="slachip ${d.meetsSla ? "ok" : "bad"}" title="30-day uptime ${d.uptime30d.toFixed(2)}% vs ${d.slaTarget}% commitment">SLA ${d.slaTarget}% ${d.meetsSla ? "✓" : "✗ " + d.uptime30d.toFixed(2) + "%"}</span>`
+    const tgt = Number(d.slaTarget);
+    const sla = d.slaTarget != null && !Number.isNaN(tgt)
+      ? `<span class="slachip ${d.meetsSla ? "ok" : "bad"}" title="30-day uptime ${d.uptime30d.toFixed(2)}% vs ${tgt}% commitment">SLA ${tgt}% ${d.meetsSla ? "✓" : "✗ " + d.uptime30d.toFixed(2) + "%"}</span>`
       : "";
     const hostRows = (d.hosts || []).map((h) => `
-      <div class="row subrow ${h.state}"><span class="dot ${esc(h.state)}"></span>
+      <div class="row subrow ${esc(h.state)}"><span class="dot ${esc(h.state)}"></span>
         <span class="name">${esc(h.label)}</span>
-        <span class="state stat-${esc(h.state)}">${h.state === "unknown" ? "checking…" : h.state === "up" ? "operational" : h.state}</span></div>`).join("");
+        <span class="state stat-${esc(h.state)}">${h.state === "unknown" ? "checking…" : h.state === "up" ? "operational" : esc(h.state)}</span></div>`).join("");
     return `
-    <div class="row ${d.state}"><span class="dot ${esc(d.state)}"></span>
+    <div class="row ${esc(d.state)}"><span class="dot ${esc(d.state)}"></span>
       <span class="name">${esc(d.label)}</span>${sla}
-      <span class="state stat-${esc(d.state)}">${d.state === "up" ? (d.upSince ? "up · " + since(d.upSince) : "operational") : d.state}</span></div>${hostRows}`;
+      <span class="state stat-${esc(d.state)}">${d.state === "up" ? (d.upSince ? "up · " + since(d.upSince) : "operational") : esc(d.state)}</span></div>${hostRows}`;
   }).join("")
     || '<div class="row"><span class="name" style="color:var(--muted)">No services listed.</span></div>';
   $("incPanel").classList.toggle("hidden", !(r.incidents || []).length);
@@ -182,7 +183,7 @@ function renderMap(map) {
   const byKey = new Map(map.nodes.map((n) => [n.key, n]));
   for (const [k, p] of pos) {
     const n = byKey.get(k);
-    const w = Math.max(90, n.label.length * 7.5 + 34);
+    const w = Math.max(90, (n.label || "").length * 7.5 + 34);
     svg += `<g class="node ${esc(n.state)}">
       <rect x="${p.x - w / 2}" y="${p.y - 17}" width="${w}" height="34" rx="7"/>
       <circle cx="${p.x - w / 2 + 15}" cy="${p.y}" r="4.5" fill="${DOTC[n.state] || "var(--muted)"}"/>

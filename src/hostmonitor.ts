@@ -90,12 +90,15 @@ export async function hostMonitorTick(deps: HostMonitorDeps): Promise<{ checked:
     // Under a maintenance window covering the router, keep state fresh but
     // don't raise host-down issues/alerts (and clear any lingering one).
     if (deps.suppressed?.(router.serialNumber, router.customerGroup, "host")) {
-      if (next !== "offline") deps.issues.resolve(router.serialNumber, "host-down", `host:${host.address}`);
-      deps.hosts.save(host);
+      const wasResolved = next !== "offline" && deps.issues.resolve(router.serialNumber, "host-down", `host:${host.address}`);
+      // Only rewrite hosts.json when something durable changed — lastCheckAt/RTT
+      // change every 15s tick and must not force a full-file write each time.
+      if (prev !== next || wasResolved) deps.hosts.save(host);
       return;
     }
-    if (prev !== undefined && prev !== next) transition(router, host, prev, next, now);
-    deps.hosts.save(host);
+    const changed = prev !== undefined && prev !== next;
+    if (changed) transition(router, host, prev, next, now);
+    if (prev !== next) deps.hosts.save(host);
   }
 
   // Silence a host while its router is offline: resolve any open host-down
@@ -136,10 +139,20 @@ export async function hostMonitorTick(deps: HostMonitorDeps): Promise<{ checked:
 }
 
 export function startHostMonitor(deps: HostMonitorDeps, intervalSeconds: number): () => void {
-  const timer = setInterval(() => {
-    hostMonitorTick(deps).catch((err) => console.error(`host-monitor: ${(err as Error).message}`));
-  }, intervalSeconds * 1000);
+  let busy = false;
+  const run = async (): Promise<void> => {
+    if (busy) return; // ping timeouts can make a tick exceed the interval
+    busy = true;
+    try {
+      await hostMonitorTick(deps);
+    } catch (err) {
+      console.error(`host-monitor: ${(err as Error).message}`);
+    } finally {
+      busy = false;
+    }
+  };
+  const timer = setInterval(() => void run(), intervalSeconds * 1000);
   timer.unref?.();
-  void hostMonitorTick(deps).catch(() => undefined);
+  void run();
   return () => clearInterval(timer);
 }

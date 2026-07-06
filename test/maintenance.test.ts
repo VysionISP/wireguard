@@ -75,4 +75,29 @@ describe("liveness respects maintenance", () => {
     expect(issues.counts().critical).toBe(0); // but no issue/alert
     expect(alerts.length).toBe(0);
   });
+
+  it("reconciles: a device that died during a window gets its issue when the window ends", async () => {
+    const store = new RouterStore(path.join(tempDir(), "r.json"));
+    store.save(router());
+    const issues = new IssueStore(path.join(tempDir(), "i.json"));
+    const events = new EventLog(path.join(tempDir(), "e.jsonl"));
+    const alerts: string[] = [];
+    const alerter = new Alerter({ webhookUrl: "https://h.test", notifyOnline: true, suppressMinutes: 0 } as any, async (t) => { alerts.push(t); });
+    const maint = new MaintenanceStore(path.join(tempDir(), "m.json"));
+    const w = win(maint);
+    const r = store.findBySerial("DEV1")!;
+    r.lastPingOkAt = new Date(Date.now() - 200_000).toISOString();
+    store.save(r);
+    const deps = {
+      store, issues, events, alerter, warnAfterSeconds: 20, offlineAfterSeconds: 60, port: 80, timeoutMs: 100,
+      ping: async () => false, suppressed: (s: string, g: string | undefined, c: string) => maint.suppressed(s, g, c as any),
+    };
+    await livenessTick(deps); // muted → offline state, no issue
+    expect(issues.counts().critical).toBe(0);
+
+    maint.remove(w.id); // window ends
+    await livenessTick(deps); // reconcile → issue opens now, no transition needed
+    expect(issues.counts().critical).toBe(1);
+    expect(alerts.some((a) => /OFFLINE/i.test(a))).toBe(true);
+  });
 });

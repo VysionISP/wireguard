@@ -877,6 +877,11 @@ async function api(path, opts = {}) {
 
 function showLogin(err) {
   clearInterval(timer);
+  // Close every live stream — otherwise EventSource treats the 401 as an error
+  // and reconnects forever behind the login screen with the stale token.
+  if (fleetES) { fleetES.close(); fleetES = null; }
+  stopMapStream();
+  stopLiveStream();
   me = null;
   $("app").classList.add("hidden");
   $("login").classList.remove("hidden");
@@ -970,7 +975,7 @@ async function customerStatusPage(name, rotate) {
     <p class="chips"><b>This link is permanent</b> — opening this dialog again always shows the same URL.
       <button data-custrotate="${esc(name)}" style="margin-left:8px">Rotate link</button>
       <button class="danger" data-custpagedel="${esc(name)}" style="margin-left:4px">Disable status page</button></p>
-    ${rotate ? '<p class="chips" style="color:var(--warn)">Link rotated — the old URL no longer works. Send the customer this new one.</p>' : ""}`;
+    ${rotate ? '<p class="chips" style="color:var(--amber)">Link rotated — the old URL no longer works. Send the customer this new one.</p>' : ""}`;
   $("modal").showModal();
   loadCustomers();
 }
@@ -1195,7 +1200,7 @@ function renderMap() {
   const nodesEl = $("mapNodes");
   nodesEl.innerHTML = mapState.routers.map((r) => {
     const p = mapState.nodes[r.id] || { x: 60, y: 60 };
-    return `<div class="mapnode ${r.online ? "up" : ""} ${r.deviceType}" data-node="${esc(r.id)}" style="left:${p.x}px;top:${p.y}px">
+    return `<div class="mapnode ${r.online ? "up" : ""} ${esc(r.deviceType || "customer")}" data-node="${esc(r.id)}" style="left:${p.x}px;top:${p.y}px">
       <div class="nled"></div>
       <div class="nname">${esc(r.label || r.identity || r.serialNumber)}</div>
       <div class="nip">${esc(r.tunnelIp || r.serialNumber)}</div>
@@ -1549,10 +1554,15 @@ function portGroupKey(i) {
 }
 async function loadPortMap(ref) {
   const box = $("portmap");
+  // Claim ownership up-front so a stale in-flight load for another device can
+  // detect it was superseded and bail (opening device B while A's tunnel
+  // fetch is still pending must not write A's ports into B's dialog).
+  portState = { ref, rules: new Map(), ifaces: [] };
   box.innerHTML = '<span class="chips">querying the router over the tunnel…</span>';
   let data;
   try { data = await api("/api/routers/" + encodeURIComponent(ref) + "/interfaces"); }
-  catch (e) { box.innerHTML = `<span class="chips">${esc(e.message)} — type port names in the field below instead.</span>`; return; }
+  catch (e) { if (portState.ref === ref) box.innerHTML = `<span class="chips">${esc(e.message)} — type port names in the field below instead.</span>`; return; }
+  if (portState.ref !== ref) return; // a newer device dialog took over
   const rules = new Map();
   for (const p of (data.ports && data.ports.length ? data.ports : (data.watched || []).map((n) => ({ name: n, link: true, inverted: false }))))
     rules.set(p.name, { name: p.name, link: p.link !== false, inverted: !!p.inverted, highBps: p.highBps || 0, lowBps: p.lowBps || 0 });
@@ -1852,11 +1862,13 @@ async function openProfile(ref) {
   try {
     prof = await api("/api/routers/" + encodeURIComponent(ref) + "/profile");
   } catch (e) {
-    $("pBody").innerHTML = `<p class="chips">Could not reach the router: ${esc(e.message)}</p>`;
+    if (profileState.ref === ref) $("pBody").innerHTML = `<p class="chips">Could not reach the router: ${esc(e.message)}</p>`;
     return;
   }
+  if (profileState.ref !== ref) return; // another device's profile was opened
   profileState.prof = prof;
   profileState.hosts = await api("/api/routers/" + encodeURIComponent(ref) + "/hosts").catch(() => []);
+  if (profileState.ref !== ref) return;
   $("pTitle").textContent = prof.identity + " — profile";
   renderProfileShell(prof);
   await loadTraffic();
@@ -2101,9 +2113,9 @@ function trafficChartSVG(cur, prev, t) {
 
 /* ---------------- bulk ---------------- */
 function updateBulkInfo() {
-  const online = allRouters.filter((r) => r.online).length;
+  const onlineCount = allRouters.filter(online).length;
   $("bulkTargetInfo").textContent = $("bulkAll").checked
-    ? `${online} online router(s) will run this.`
+    ? `${onlineCount} online router(s) will run this.`
     : "Uncheck runs against all non-revoked routers (offline ones will simply fail to connect).";
 }
 async function runBulk() {
@@ -2313,7 +2325,7 @@ async function loadMaintenance() {
   $("mwRows").innerHTML = list.map((w) => {
     const s = Date.parse(w.startsAt), e = Date.parse(w.endsAt);
     const status = now < s ? '<span class="pill verified">scheduled</span>' : now < e ? '<span class="pill confirmed">active</span>' : '<span class="pill revoked">ended</span>';
-    const scope = w.scopeKind === "all" ? "Whole fleet" : `${w.scopeKind}: ${esc(w.scopeValue || "")}`;
+    const scope = w.scopeKind === "all" ? "Whole fleet" : `${w.scopeKind}: ${w.scopeValue || ""}`;
     const cats = w.categories && w.categories.length ? w.categories.join(", ") : "everything";
     return `<tr><td>${status}</td><td>${esc(scope)}</td>
       <td class="mono">${esc(fmtDate(w.startsAt))} → ${esc(fmtDate(w.endsAt))}</td>
@@ -2463,7 +2475,7 @@ document.addEventListener("click", async (ev) => {
   if (d.view != null) return viewBackup(d.ref, d.serial, d.view, d.prev).catch((e) => toast(e.message));
   if (d.dl != null) return downloadBackup(d.ref, d.serial, d.dl).catch((e) => toast(e.message));
   if (d.diffab != null) { const [a, b] = d.diffab.split("|"); return showDiffBetween(d.ref, a, b).catch((e) => toast(e.message)); }
-  if (d.tkcopy != null) { const t = await api("/api/bootstrap-info").catch(() => null); return copy(location.origin ? `/tool fetch url="${location.origin}/bootstrap.rsc?token=${d.tkcopy}" dst-path=bootstrap.rsc; :delay 2s; /import bootstrap.rsc` : d.tkcopy, "One-liner"); }
+  if (d.tkcopy != null) { return copy(`/tool fetch url="${location.origin}/bootstrap.rsc?token=${d.tkcopy}" dst-path=bootstrap.rsc; :delay 2s; /import bootstrap.rsc`, "One-liner"); }
   if (d.tkdel != null) { if (confirm("Delete this token?")) { await api("/api/tokens/" + encodeURIComponent(d.tkdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadTokens(); } return; }
   if (d.usdel != null) { if (confirm(`Remove user ${d.usdel}?`)) { await api("/api/users/" + encodeURIComponent(d.usdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadUsers(); } return; }
   if (d.usreset != null) { return resetUserPassword(d.usreset); }

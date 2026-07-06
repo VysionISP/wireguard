@@ -199,10 +199,20 @@ export async function metricsTick(deps: MetricsSamplerDeps): Promise<{ sampled: 
 
 /** Runs metricsTick on an interval; returns a stop function. */
 export function startMetricsSampler(deps: MetricsSamplerDeps, intervalSeconds: number): () => void {
-  const timer = setInterval(() => {
-    metricsTick(deps).catch((err) => console.error(`metrics: ${(err as Error).message}`));
-  }, intervalSeconds * 1000);
+  let busy = false;
+  const run = async (): Promise<void> => {
+    if (busy) return;
+    busy = true;
+    try {
+      await metricsTick(deps);
+    } catch (err) {
+      console.error(`metrics: ${(err as Error).message}`);
+    } finally {
+      busy = false;
+    }
+  };
+  const timer = setInterval(() => void run(), intervalSeconds * 1000);
   timer.unref?.();
-  void metricsTick(deps).catch(() => undefined);
+  void run();
   return () => clearInterval(timer);
 }

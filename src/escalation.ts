@@ -4,6 +4,7 @@ import type { SettingsStore } from "./settings.js";
 import type { AuditLog } from "./audit.js";
 import type { Config } from "./config.js";
 import { telegram as realTelegram, type TelegramClient, type TgChat } from "./telegram.js";
+import { maintCategory } from "./maintenance.js";
 
 /**
  * Escalation: a critical issue nobody acknowledges within
@@ -25,6 +26,10 @@ export interface EscalationDeps {
   tg?: TelegramClient;
   /** Generic webhook receives escalations too (when configured). */
   webhookUrl?: string;
+  /** Maintenance-window suppression (issues under a window don't escalate). */
+  suppressed?: (serial: string, group: string | undefined, category: string) => boolean;
+  /** Look up a router's customer group for the suppression check. */
+  groupOf?: (serial: string) => string | undefined;
 }
 
 function fmtAge(ms: number): string {
@@ -52,7 +57,12 @@ export class EscalationEngine {
   async tick(nowMs = Date.now()): Promise<number> {
     const { cfg, issues } = this.deps;
     if (!cfg.escalateAfterMinutes) return 0;
-    const open = issues.list(false).filter((i) => i.severity === "critical" && !i.ackedAt);
+    const open = issues.list(false).filter((i) => {
+      if (i.severity !== "critical" || i.ackedAt) return false;
+      // Don't escalate an issue muted by a maintenance window (a device that
+      // dropped before planned work shouldn't page all night).
+      return !this.deps.suppressed?.(i.serialNumber, this.deps.groupOf?.(i.serialNumber), maintCategory(i.type));
+    });
     // Drop state for issues that no longer exist / got acked or resolved.
     const openIds = new Set(open.map((i) => i.id));
     for (const id of this.state.keys()) if (!openIds.has(id)) this.state.delete(id);

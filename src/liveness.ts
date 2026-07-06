@@ -102,11 +102,12 @@ export async function livenessTick(deps: LivenessDeps): Promise<{ up: number; wa
     else stats.offline++;
 
     const prev = router.health;
+    // lastSeenAt / lastPingOkAt are updated in memory every tick (so the live
+    // API/SSE show fresh values), but they DON'T force a disk write — only a
+    // real health transition persists. Otherwise every alive router would
+    // rewrite the whole inventory file on every 10s probe.
+    if (alive) router.lastSeenAt = now;
     let dirty = false;
-    if (alive && router.lastSeenAt !== now) {
-      router.lastSeenAt = now;
-      dirty = true;
-    }
 
     if (prev === undefined) {
       // First probe after deploy: set the baseline quietly (don't fire an
@@ -121,7 +122,20 @@ export async function livenessTick(deps: LivenessDeps): Promise<{ up: number; wa
       handleTransition(router, prev, next, now);
     }
 
-    if (dirty) deps.store.save(router);
+    if (dirty) deps.store.saveExisting(router);
+
+    // Reconcile: if it's offline and NOT under maintenance but has no open
+    // issue (e.g. it died during a window that has now ended, so the offline
+    // transition was muted and never re-fires), raise it now. issues.open is
+    // idempotent, so this is a no-op in the normal case.
+    if (router.health === "offline" && !deps.suppressed?.(router.serialNumber, router.customerGroup, "offline")) {
+      const label = labelOf(router);
+      if (deps.issues.open(router.serialNumber, label, "offline", "critical", `${label} is offline (no response for ${deps.offlineAfterSeconds}s)`)) {
+        deps.events.add({ at: now, serialNumber: router.serialNumber, label, type: "offline", severity: "critical", message: `${label} went offline` });
+        deps.outages?.open(router.serialNumber, label, now);
+        deps.alerter?.routerTransition(router, false).catch((err) => console.error(`alert failed: ${(err as Error).message}`));
+      }
+    }
   }
 
   function handleTransition(router: RouterRecord, prev: HealthState, next: HealthState, at: string): void {
@@ -175,10 +189,20 @@ export async function livenessTick(deps: LivenessDeps): Promise<{ up: number; wa
 
 /** Runs livenessTick on an interval; returns a stop function. */
 export function startLiveness(deps: LivenessDeps, intervalSeconds: number): () => void {
-  const timer = setInterval(() => {
-    livenessTick(deps).catch((err) => console.error(`liveness: ${(err as Error).message}`));
-  }, intervalSeconds * 1000);
+  let busy = false;
+  const run = async (): Promise<void> => {
+    if (busy) return; // a slow tick is still running — skip this fire
+    busy = true;
+    try {
+      await livenessTick(deps);
+    } catch (err) {
+      console.error(`liveness: ${(err as Error).message}`);
+    } finally {
+      busy = false;
+    }
+  };
+  const timer = setInterval(() => void run(), intervalSeconds * 1000);
   timer.unref?.();
-  void livenessTick(deps).catch(() => undefined);
+  void run();
   return () => clearInterval(timer);
 }

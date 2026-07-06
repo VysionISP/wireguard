@@ -29,10 +29,6 @@ export function mergeDuration(spans: Span[]): number {
   return total;
 }
 
-function overlap(a: Span, b: Span): number {
-  return Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start));
-}
-
 export interface SlaInput {
   /** Device existed from here — the period floor (registration time). */
   createdAt: number;
@@ -80,8 +76,13 @@ export function computeSla(i: SlaInput): SlaResult {
   for (const o of i.outages) {
     const clipped: Span = { start: Math.max(o.start, start), end: Math.min(o.end, i.to) };
     if (clipped.end <= clipped.start) continue;
-    let dur = clipped.end - clipped.start;
-    for (const m of maintClipped) dur -= overlap(clipped, m);
+    // Subtract the maintenance covered by this outage. Clip each window to the
+    // outage and MERGE before summing, so two overlapping windows (e.g. a
+    // fleet-wide + a device-specific one) aren't double-counted.
+    const maintInOutage = maintClipped
+      .map((m) => ({ start: Math.max(m.start, clipped.start), end: Math.min(m.end, clipped.end) }))
+      .filter((m) => m.end > m.start);
+    let dur = clipped.end - clipped.start - mergeDuration(maintInOutage);
     dur = Math.max(0, dur);
     if (dur === 0) continue;
     downMs += dur;

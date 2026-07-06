@@ -59,6 +59,19 @@ export class RouterStore {
     this.persist();
   }
 
+  /**
+   * Persist an already-known record. Returns false (without writing) if the
+   * record was deleted since a caller captured its reference — this stops a
+   * slow background monitor from resurrecting a revoked+removed router when its
+   * tick finishes after the delete.
+   */
+  saveExisting(record: RouterRecord): boolean {
+    if (!this.routers.has(record.id)) return false;
+    this.routers.set(record.id, record);
+    this.persist();
+    return true;
+  }
+
   delete(id: string): boolean {
     if (!this.routers.delete(id)) return false;
     this.persist();
