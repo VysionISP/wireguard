@@ -1615,7 +1615,8 @@ export function buildApp(deps: AppDeps): Express {
         key: `n${i}`,
         label: r.label || r.identity || "device",
         state: devices[i].state,
-        pos: topo.nodes[r.id] ?? null,
+        // Lets the page pick a sensible tree root (core gear on top).
+        kind: r.deviceType ?? "customer",
       })),
       links: topo.links
         .filter((l) => keyOf.has(l.a) && keyOf.has(l.b))

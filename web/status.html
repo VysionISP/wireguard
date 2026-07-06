@@ -43,7 +43,7 @@
   .up .state { color: var(--ok); } .stat-degraded { color: var(--warn); } .stat-down { color: var(--crit); }
   .mapbox { padding: 8px 10px 12px; }
   .mapbox svg { display: block; width: 100%; height: auto; }
-  .mapbox .lnk { stroke: #22384a; stroke-width: 2; }
+  .mapbox .lnk { stroke: #22384a; stroke-width: 2; fill: none; }
   .mapbox .node rect { fill: #0e151d; stroke: var(--border); rx: 7; }
   .mapbox .node.up rect { stroke: #14442c; }
   .mapbox .node.degraded rect { stroke: #4a3a10; }
@@ -126,41 +126,62 @@ async function load() {
   $("updated").textContent = "Updated " + new Date(r.at).toLocaleTimeString() + " · refreshes automatically";
 }
 const DOTC = { up: "var(--ok)", degraded: "var(--warn)", down: "var(--crit)" };
+/**
+ * Draws the network as a TREE, not the dashboard's free-form layout — the
+ * saved coordinates don't survive being squeezed into this narrow panel.
+ * Root = the best-connected infrastructure device; everything else hangs off
+ * it level by level (BFS over the links), port names on the branches.
+ */
 function renderMap(map) {
   const panel = $("mapPanel");
   if (!map || !map.nodes || map.nodes.length < 2) { panel.classList.add("hidden"); return; }
   panel.classList.remove("hidden");
-  const W = 700, H = 300, PAD = 60;
 
-  // Positions: use the saved layout, auto-placing any unsaved node on a circle.
-  const saved = map.nodes.filter((n) => n.pos);
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const n of saved) { minX = Math.min(minX, n.pos.x); maxX = Math.max(maxX, n.pos.x); minY = Math.min(minY, n.pos.y); maxY = Math.max(maxY, n.pos.y); }
-  const havebox = saved.length >= 2 && maxX > minX;
-  const pos = new Map();
-  map.nodes.forEach((n, i) => {
-    if (n.pos && havebox) {
-      pos.set(n.key, {
-        x: PAD + ((n.pos.x - minX) / (maxX - minX || 1)) * (W - PAD * 2),
-        y: PAD + ((n.pos.y - minY) / ((maxY - minY) || 1)) * (H - PAD * 2),
-      });
-    } else {
-      const a = (i / map.nodes.length) * Math.PI * 2 - Math.PI / 2;
-      pos.set(n.key, { x: W / 2 + Math.cos(a) * (W / 2 - PAD - 20), y: H / 2 + Math.sin(a) * (H / 2 - PAD) });
+  // Adjacency from links.
+  const adj = new Map(map.nodes.map((n) => [n.key, []]));
+  for (const l of map.links || []) {
+    if (adj.has(l.a) && adj.has(l.b)) { adj.get(l.a).push(l.b); adj.get(l.b).push(l.a); }
+  }
+  // Roots first: infrastructure, then best-connected.
+  const deg = (k) => adj.get(k).length;
+  const seeds = [...map.nodes].sort((a, b) =>
+    ((b.kind === "infrastructure") - (a.kind === "infrastructure")) || (deg(b.key) - deg(a.key)));
+  // BFS layering across all components (isolated devices land on their own row).
+  const level = new Map(), order = [];
+  for (const s of seeds) {
+    if (level.has(s.key)) continue;
+    level.set(s.key, 0);
+    const q = [s.key];
+    while (q.length) {
+      const k = q.shift();
+      order.push(k);
+      for (const nb of adj.get(k)) if (!level.has(nb)) { level.set(nb, level.get(k) + 1); q.push(nb); }
     }
-  });
+  }
+  const rows = [];
+  for (const k of order) { const l = level.get(k); (rows[l] ??= []).push(k); }
+
+  const W = 700, ROW = 88, PADY = 34;
+  const H = PADY * 2 + (rows.length - 1) * ROW + 36;
+  $("map").setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const pos = new Map();
+  rows.forEach((keys, l) => keys.forEach((k, i) =>
+    pos.set(k, { x: (W * (i + 1)) / (keys.length + 1), y: PADY + l * ROW })));
 
   let svg = "";
   for (const l of map.links || []) {
     const a = pos.get(l.a), b = pos.get(l.b);
     if (!a || !b) continue;
-    svg += `<line class="lnk" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`;
+    // Gentle curve so parallel branches don't overlap into one line.
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    svg += `<path class="lnk" fill="none" d="M${a.x} ${a.y} Q${mx} ${my} ${b.x} ${b.y}"/>`;
     const lx = (t) => a.x + (b.x - a.x) * t, ly = (t) => a.y + (b.y - a.y) * t;
-    if (l.aIface) svg += `<text class="plbl" x="${lx(0.22)}" y="${ly(0.22) - 5}" text-anchor="middle">${esc(l.aIface)}</text>`;
-    if (l.bIface) svg += `<text class="plbl" x="${lx(0.78)}" y="${ly(0.78) - 5}" text-anchor="middle">${esc(l.bIface)}</text>`;
+    if (l.aIface) svg += `<text class="plbl" x="${lx(0.3) + 5}" y="${ly(0.3)}" >${esc(l.aIface)}</text>`;
+    if (l.bIface) svg += `<text class="plbl" x="${lx(0.7) + 5}" y="${ly(0.7)}">${esc(l.bIface)}</text>`;
   }
-  for (const n of map.nodes) {
-    const p = pos.get(n.key);
+  const byKey = new Map(map.nodes.map((n) => [n.key, n]));
+  for (const [k, p] of pos) {
+    const n = byKey.get(k);
     const w = Math.max(90, n.label.length * 7.5 + 34);
     svg += `<g class="node ${esc(n.state)}">
       <rect x="${p.x - w / 2}" y="${p.y - 17}" width="${w}" height="34" rx="7"/>
