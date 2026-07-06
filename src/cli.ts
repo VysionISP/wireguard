@@ -11,6 +11,8 @@ import { startMonitor } from "./monitor.js";
 import { startLiveness } from "./liveness.js";
 import { startDeviceMonitor } from "./devicemonitor.js";
 import { MetricsStore, startMetricsSampler } from "./metrics.js";
+import { HostStore } from "./hosts.js";
+import { startHostMonitor } from "./hostmonitor.js";
 import { Alerter } from "./alerts.js";
 import { TokenStore } from "./tokens.js";
 import { UserStore } from "./users.js";
@@ -49,7 +51,8 @@ program
     const issues = new IssueStore(config.issuesPath);
     const events = new EventLog(config.eventsPath);
     const metrics = new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
-    const app = buildApp({ config, store, wg, alerter, issues, events, settings, metrics });
+    const hosts = new HostStore(config.hostsPath);
+    const app = buildApp({ config, store, wg, alerter, issues, events, settings, metrics, hosts });
     if (config.liveness.enabled) {
       // Active ping owns online/warning/offline; run the handshake monitor only
       // for handshake-age bookkeeping (no offline issues, to avoid duplicates).
@@ -80,6 +83,18 @@ program
         config.metrics.sampleSeconds,
       );
       console.log(`metrics sampler: every ${config.metrics.sampleSeconds}s (traffic history, ${config.metrics.retentionDays}d retention)`);
+    }
+    if (config.hosts.enabled) {
+      startHostMonitor(
+        {
+          store, hosts, issues, events, alerter,
+          warnAfterSeconds: config.hosts.warnAfterSeconds,
+          offlineAfterSeconds: config.hosts.offlineAfterSeconds,
+          pingCount: config.hosts.pingCount,
+        },
+        config.hosts.intervalSeconds,
+      );
+      console.log(`host monitor: every ${config.hosts.intervalSeconds}s (internal ping targets, warn ${config.hosts.warnAfterSeconds}s, offline ${config.hosts.offlineAfterSeconds}s)`);
     }
     if (alerter.enabled) console.log("alerts: enabled");
     app.listen(config.server.port, config.server.host, () => {

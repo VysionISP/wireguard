@@ -69,6 +69,14 @@
     "sampleSeconds": 300,
     "retentionDays": 14
   },
+  "hosts": {
+    "enabled": true,
+    "intervalSeconds": 15,
+    "warnAfterSeconds": 30,
+    "offlineAfterSeconds": 90,
+    "pingCount": 2
+  },
+  "hostsPath": "data/hosts.json",
   "metricsPath": "data/metrics.jsonl",
   "storePath": "data/routers.json",
   "tokensPath": "data/tokens.json",

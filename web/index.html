@@ -1710,9 +1710,36 @@ async function openProfile(ref) {
     return;
   }
   profileState.prof = prof;
+  profileState.hosts = await api("/api/routers/" + encodeURIComponent(ref) + "/hosts").catch(() => []);
   $("pTitle").textContent = prof.identity + " — profile";
   renderProfileShell(prof);
   await loadTraffic();
+}
+
+function healthDot(state) {
+  if (state === "warning") return '<span class="dot warn"></span>degraded';
+  if (state === "offline") return '<span class="dot off"></span>offline';
+  if (state === "up") return '<span class="dot on"></span>up';
+  return '<span class="dot off"></span>pending';
+}
+async function reloadProfileHosts() {
+  profileState.hosts = await api("/api/routers/" + encodeURIComponent(profileState.ref) + "/hosts").catch(() => []);
+  renderProfileShell(profileState.prof);
+  renderTraffic();
+}
+async function addMonitoredHost(address, name, mac) {
+  try {
+    await api("/api/routers/" + encodeURIComponent(profileState.ref) + "/hosts", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address, name: name || "", mac: mac || "" }),
+    });
+    toast("Now ping-monitoring " + address);
+    await reloadProfileHosts();
+  } catch (e) { toast(e.message); }
+}
+async function removeMonitoredHost(id) {
+  try { await api("/api/hosts/" + encodeURIComponent(id), { method: "DELETE" }); toast("Stopped monitoring"); await reloadProfileHosts(); }
+  catch (e) { toast(e.message); }
 }
 
 function renderProfileShell(prof) {
@@ -1724,6 +1751,8 @@ function renderProfileShell(prof) {
   const health = (prof.health || []).filter((h) => h.value !== "" && h.value != null);
   const leases = prof.dhcpLeases || [];
   const bound = leases.filter((l) => (l.status || "").toLowerCase() === "bound" || l.status === "").length;
+  const monHosts = profileState.hosts || [];
+  const monByAddr = new Map(monHosts.map((h) => [h.address, h]));
   $("pBody").innerHTML = `
     <div class="signal">
       ${signalTile("Uptime", r.uptime)}
@@ -1741,16 +1770,30 @@ function renderProfileShell(prof) {
     ${health.length ? `<div class="sub">Health</div><div class="signal">
       ${health.map((h) => signalTile(h.name, h.value)).join("")}</div>` : ""}
 
-    <div class="sub">DHCP leases <span class="chips">(${bound} active of ${leases.length})</span></div>
+    ${monHosts.length ? `<div class="sub">Monitored internal hosts <span class="chips">(pinged by this router)</span></div>
+    <div class="tablewrap"><table><thead><tr><th>State</th><th>Address</th><th>Name</th><th>RTT</th><th>Last reply</th><th></th></tr></thead>
+      <tbody>${monHosts.map((h) => `<tr>
+        <td>${healthDot(h.state)}</td>
+        <td class="mono">${esc(h.address)}</td>
+        <td>${esc(h.name || "—")}</td>
+        <td class="mono">${h.lastRttMs != null ? h.lastRttMs.toFixed(1) + " ms" : "—"}</td>
+        <td>${h.lastOkAt ? esc(fmtAge((Date.now() - Date.parse(h.lastOkAt)) / 1000)) : "never"}</td>
+        <td class="actions"><button class="danger" data-hostdel="${esc(h.id)}">Stop</button></td></tr>`).join("")}
+      </tbody></table></div>` : ""}
+
+    <div class="sub">DHCP leases <span class="chips">(${bound} active of ${leases.length}) — click Monitor to ping-watch a client</span></div>
     ${leases.length ? `<div class="tablewrap"><table><thead><tr>
-        <th>Address</th><th>Host</th><th>MAC</th><th>Server</th><th>Status</th><th>Expires</th></tr></thead>
+        <th>Address</th><th>Host</th><th>MAC</th><th>Server</th><th>Status</th><th>Expires</th><th></th></tr></thead>
       <tbody>${leases.map((l) => `<tr>
         <td class="mono">${esc(l.address)}</td>
         <td>${esc(l.hostName || "—")}</td>
         <td class="mono">${esc(l.macAddress)}</td>
         <td>${esc(l.server || "—")}</td>
         <td>${l.dynamic ? "" : '<span class="dtype infrastructure" style="margin-right:4px">static</span>'}<span class="dot ${(l.status||"").toLowerCase()==="bound"||!l.status ? "on":"off"}"></span>${esc(l.status || "bound")}</td>
-        <td class="mono">${esc(l.expiresAfter || "—")}</td></tr>`).join("")}</tbody></table></div>`
+        <td class="mono">${esc(l.expiresAfter || "—")}</td>
+        <td class="actions">${monByAddr.has(l.address)
+          ? `<span class="chips">${healthDot(monByAddr.get(l.address).state)}</span>`
+          : `<button data-hostadd="${esc(l.address)}" data-hostname="${esc(l.hostName || "")}" data-hostmac="${esc(l.macAddress || "")}">＋ Monitor</button>`}</td></tr>`).join("")}</tbody></table></div>`
       : '<p class="chips">No DHCP leases (this device may not run a DHCP server).</p>'}
 
     <div class="sub">IP addresses</div>
@@ -2105,6 +2148,8 @@ document.addEventListener("click", async (ev) => {
   if (btn.id === "pcRemove") { portState.rules.delete(btn.dataset.port); $("portcfg").close(); renderPortMap(portState.ifaces || []); return toast("Port no longer monitored — click Save monitoring to apply"); }
   const d = btn.dataset;
   if (d.copy != null) return copy(d.copy);
+  if (d.hostadd != null) return addMonitoredHost(d.hostadd, d.hostname, d.hostmac);
+  if (d.hostdel != null) return removeMonitoredHost(d.hostdel);
   if (d.view != null) return viewBackup(d.ref, d.serial, d.view, d.prev).catch((e) => toast(e.message));
   if (d.dl != null) return downloadBackup(d.ref, d.serial, d.dl).catch((e) => toast(e.message));
   if (d.diffab != null) { const [a, b] = d.diffab.split("|"); return showDiffBetween(d.ref, a, b).catch((e) => toast(e.message)); }

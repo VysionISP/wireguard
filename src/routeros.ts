@@ -108,6 +108,55 @@ export async function fetchLog(
   }));
 }
 
+export interface PingResult {
+  sent: number;
+  received: number;
+  avgMs: number | null;
+}
+
+export type FetchPingFn = typeof fetchPing;
+
+/**
+ * Ask the router to ping an address on its own LAN and summarise the result.
+ * This is how we reach *internal* devices (DHCP clients, cameras, APs) that
+ * live behind the router and aren't routable from the provisioning server.
+ * RouterOS REST /ping returns one row per echo; a row with a `time` and no
+ * error status counts as received.
+ */
+export async function fetchPing(
+  tunnelIp: string,
+  username: string,
+  password: string,
+  address: string,
+  count = 2,
+  timeoutMs = 8000,
+): Promise<PingResult> {
+  const auth = Buffer.from(`${username}:${password}`).toString("base64");
+  const res = await fetch(`http://${tunnelIp}/rest/ping`, {
+    method: "POST",
+    headers: { authorization: `Basic ${auth}`, "content-type": "application/json" },
+    body: JSON.stringify({ address, count: String(count) }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`RouterOS REST /ping: ${res.status}`);
+  const rows = (await res.json()) as Array<Record<string, string>>;
+  let received = 0;
+  let sumMs = 0;
+  let timed = 0;
+  for (const r of rows) {
+    const ok = (r.status ?? "") === "" && r.time != null && r.time !== "";
+    if (ok) {
+      received++;
+      const ms = parseFloat(String(r.time).replace(/[^\d.]/g, ""));
+      if (!Number.isNaN(ms)) {
+        sumMs += /ms/.test(r.time) || !/us|s/.test(r.time) ? ms : ms; // RouterOS reports ms
+        timed++;
+      }
+    }
+  }
+  return { sent: rows.length || count, received, avgMs: timed ? sumMs / timed : null };
+}
+
 export interface LiveInterface {
   name: string;
   type: string;

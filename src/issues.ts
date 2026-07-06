@@ -8,6 +8,7 @@ export type IssueType =
   | "link-down"
   | "traffic-high"
   | "traffic-low"
+  | "host-down"
   | "login"
   | "monitor-error";
 

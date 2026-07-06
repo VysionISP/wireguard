@@ -36,6 +36,13 @@
   .conn { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-top: 2px; }
   .conn.live { color: var(--ok); } .conn.down { color: var(--crit); }
   .conn i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; margin-right: 6px; }
+  .soundbtn { background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 8px 11px; font-size: 16px; cursor: pointer; }
+  .soundbtn.off { opacity: .45; }
+  .soundbtn.locked { border-color: var(--warn); color: var(--warn); animation: beat 1.6s infinite; }
+
+  .fault.degraded { border-color: #4a3a10; }
+  .fault.degraded .sevbar { background: var(--warn); box-shadow: 0 0 16px -2px var(--warn); }
+  .fault.degraded .ftype { color: var(--warn); }
 
   .banner {
     flex: 0 0 auto; text-align: center; font-size: 30px; font-weight: 700; letter-spacing: .22em;
@@ -106,6 +113,7 @@
     <div id="clock">--:--:--</div>
     <div id="conn" class="conn"><i></i>connecting…</div>
   </div>
+  <button id="soundBtn" class="soundbtn" title="Toggle alert sound">🔊</button>
 </header>
 
 <div id="banner" class="banner ok">— — —</div>
@@ -164,8 +172,49 @@ function hhmmss(iso) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+/* ---- alert sound (Web Audio; needs a user gesture to unlock) ---- */
+let soundOn = true;
+let audioCtx = null;
+function unlockAudio() {
+  if (!audioCtx) { try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return; } }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  updateSoundBtn();
+}
+function alarm() {
+  if (!soundOn || !audioCtx || audioCtx.state !== "running") return;
+  // Two-tone chirp, repeated twice.
+  const t0 = audioCtx.currentTime;
+  for (let k = 0; k < 2; k++) {
+    const base = t0 + k * 0.32;
+    for (const [f, dt] of [[880, 0], [660, 0.16]]) {
+      const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
+      osc.type = "square"; osc.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, base + dt);
+      g.gain.exponentialRampToValueAtTime(0.25, base + dt + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, base + dt + 0.15);
+      osc.connect(g).connect(audioCtx.destination);
+      osc.start(base + dt); osc.stop(base + dt + 0.16);
+    }
+  }
+}
+function updateSoundBtn() {
+  const b = $("soundBtn");
+  const locked = soundOn && (!audioCtx || audioCtx.state !== "running");
+  b.textContent = soundOn ? (locked ? "🔇!" : "🔊") : "🔈";
+  b.classList.toggle("off", !soundOn);
+  b.classList.toggle("locked", locked); // amber pulse = click to enable audio
+  b.title = !soundOn ? "Alert sound off — click to enable"
+    : locked ? "Click to enable alert sound (browser needs a click first)"
+    : "Alert sound on";
+}
+$("soundBtn").addEventListener("click", () => { soundOn = !soundOn; if (soundOn) unlockAudio(); updateSoundBtn(); });
+// Any click on the page unlocks audio (satisfies the browser gesture rule).
+document.addEventListener("click", () => { if (soundOn) unlockAudio(); }, { once: false });
+
 /* ---- render ---- */
 let seenIssueIds = new Set();
+let seenCritIds = new Set();
+let seenDegraded = new Set();
 let seenEventKeys = new Set();
 let firstFrame = true;
 
@@ -183,25 +232,46 @@ function render(f) {
   else if (c.warning > 0) { banner.className = "banner warn"; banner.textContent = `${c.warning} WARNING`; }
   else { banner.className = "banner ok"; banner.textContent = "ALL SYSTEMS OPERATIONAL"; }
 
-  // faults
+  // sound: beep when a NEW critical issue appears
+  const critIds = f.issues.filter((i) => i.severity === "critical").map((i) => i.id);
+  if (!firstFrame && soundOn) {
+    const fresh = critIds.some((id) => !seenCritIds.has(id));
+    if (fresh) alarm();
+  }
+  seenCritIds = new Set(critIds);
+
+  // faults + degraded devices
   const box = $("faults");
-  $("faultCount").textContent = f.issues.length ? `(${f.issues.length})` : "";
-  if (!f.issues.length) {
+  const degraded = f.degraded || [];
+  $("faultCount").textContent = f.issues.length || degraded.length ? `(${f.issues.length + degraded.length})` : "";
+  const issueCards = f.issues.map((i) => {
+    const sev = i.severity === "critical" ? "crit" : "warn";
+    const isNew = !firstFrame && !seenIssueIds.has(i.id);
+    return `<div class="fault ${sev} ${isNew ? "new" : ""}">
+      <div class="sevbar"></div>
+      <div class="fmain">
+        <div class="ftop"><span class="who">${esc(i.label || i.serialNumber)}</span><span class="ftype">${esc(i.type)}</span></div>
+        <div class="fmsg">${esc(i.message)}</div>
+        <div class="fmeta"><span class="serial">${esc(i.serialNumber)}</span>· opened ${esc(ago(i.openedAt))}${i.ackedBy ? ` · <span class="ackd">ack ${esc(i.ackedBy)}</span>` : ""}</div>
+      </div></div>`;
+  }).join("");
+  const degCards = degraded.map((d) => {
+    const isNew = !firstFrame && !seenDegraded.has(d.id);
+    return `<div class="fault degraded ${isNew ? "new" : ""}">
+      <div class="sevbar"></div>
+      <div class="fmain">
+        <div class="ftop"><span class="who">${esc(d.label || d.serialNumber)}</span><span class="ftype">degraded</span></div>
+        <div class="fmsg">Not responding to pings${d.sinceSeconds != null ? ` — last reply ${Math.round(d.sinceSeconds)}s ago` : ""}</div>
+        <div class="fmeta"><span class="serial">${esc(d.serialNumber)}</span>· approaching offline</div>
+      </div></div>`;
+  }).join("");
+  if (!f.issues.length && !degraded.length) {
     box.innerHTML = `<div class="allclear"><div class="big">✓ ALL CLEAR</div>No active faults across ${f.fleet.total} device(s).</div>`;
   } else {
-    box.innerHTML = f.issues.map((i) => {
-      const sev = i.severity === "critical" ? "crit" : "warn";
-      const isNew = !firstFrame && !seenIssueIds.has(i.id);
-      return `<div class="fault ${sev} ${isNew ? "new" : ""}">
-        <div class="sevbar"></div>
-        <div class="fmain">
-          <div class="ftop"><span class="who">${esc(i.label || i.serialNumber)}</span><span class="ftype">${esc(i.type)}</span></div>
-          <div class="fmsg">${esc(i.message)}</div>
-          <div class="fmeta"><span class="serial">${esc(i.serialNumber)}</span>· opened ${esc(ago(i.openedAt))}${i.ackedBy ? ` · <span class="ackd">ack ${esc(i.ackedBy)}</span>` : ""}</div>
-        </div></div>`;
-    }).join("");
+    box.innerHTML = issueCards + degCards;
   }
   seenIssueIds = new Set(f.issues.map((i) => i.id));
+  seenDegraded = new Set(degraded.map((d) => d.id));
 
   // live feed
   const feed = $("feed");
@@ -238,6 +308,7 @@ function connect(token) {
 setInterval(() => { if (lastFrame && Date.now() - lastFrame > 12000) setConn("down", "no data — reconnecting…"); }, 3000);
 
 function start() {
+  updateSoundBtn();
   const token = getToken();
   if (!token) { $("gate").classList.remove("hidden"); return; }
   $("gate").classList.add("hidden");

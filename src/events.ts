@@ -8,6 +8,8 @@ export type EventType =
   | "link-up"
   | "traffic-high"
   | "traffic-low"
+  | "host-down"
+  | "host-up"
   | "offline"
   | "online"
   | "backup"

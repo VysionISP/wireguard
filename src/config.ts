@@ -156,6 +156,25 @@ const configSchema = z.object({
     .default({}),
   /** Append-only metrics samples (JSONL). */
   metricsPath: z.string().default("data/metrics.jsonl"),
+  /**
+   * Ping-monitoring of internal LAN devices (DHCP clients, cameras, APs). The
+   * router pings them on our behalf, since they aren't routable from here.
+   */
+  hosts: z
+    .object({
+      enabled: z.boolean().default(true),
+      /** How often each monitored host is pinged (via its router). */
+      intervalSeconds: z.number().int().min(5).default(15),
+      /** No successful ping for this long -> "warning". */
+      warnAfterSeconds: z.number().int().min(5).default(30),
+      /** No successful ping for this long -> "offline" (opens the issue). */
+      offlineAfterSeconds: z.number().int().min(10).default(90),
+      /** Echo requests per probe. */
+      pingCount: z.number().int().min(1).max(10).default(2),
+    })
+    .default({}),
+  /** Monitored internal hosts (ping targets behind routers). */
+  hostsPath: z.string().default("data/hosts.json"),
   /** Active issues (status board). */
   issuesPath: z.string().default("data/issues.json"),
   /** Per-device + global event log (logins, link flaps, on/offline). */

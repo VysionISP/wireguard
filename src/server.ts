@@ -24,6 +24,7 @@ import { TopologyStore, type GroupTopology } from "./topology.js";
 import { CustomerStore } from "./customers.js";
 import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn } from "./routeros.js";
 import { MetricsStore, computeTraffic } from "./metrics.js";
+import { HostStore } from "./hosts.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
 import { defaultMonitoring, effectivePorts, type RouterRecord, type DeviceType } from "./types.js";
 
@@ -37,6 +38,7 @@ export interface AppDeps {
   fetchIfaces?: FetchIfacesFn;
   fetchProfile?: FetchProfileFn;
   metrics?: MetricsStore;
+  hosts?: HostStore;
   backups?: BackupStore;
   alerter?: Alerter;
   tokens?: TokenStore;
@@ -115,6 +117,7 @@ export function buildApp(deps: AppDeps): Express {
   const fetchProfile = deps.fetchProfile ?? fetchDeviceProfile;
   const metrics =
     deps.metrics ?? new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
+  const hosts = deps.hosts ?? new HostStore(config.hostsPath);
 
   // Serialises the register critical section so concurrent phone-homes can't
   // both read the same "lowest free IP" or both burn the same one-time token
@@ -615,6 +618,7 @@ export function buildApp(deps: AppDeps): Express {
     }
     issues.clearSerial(router.serialNumber);
     topology.removeRouter(router.id);
+    hosts.removeRouter(router.serialNumber);
     store.delete(router.id);
     audit.log(who(req), "remove", router.serialNumber, router.tunnelIp);
     console.log(`removed ${router.serialNumber} from inventory`);
@@ -1055,6 +1059,70 @@ export function buildApp(deps: AppDeps): Express {
     });
   });
 
+  // ---- monitored internal hosts (ping targets behind a router) ----------
+  app.get("/api/routers/:ref/hosts", requireTech, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    res.json(hosts.forRouter(router.serialNumber));
+  });
+
+  const hostSchema = z.object({
+    address: z.string().regex(/^\d{1,3}(\.\d{1,3}){3}$/, "must be an IPv4 address"),
+    name: z.string().max(80).optional(),
+    mac: z.string().max(40).optional(),
+  });
+  app.post("/api/routers/:ref/hosts", requireTech, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const parsed = hostSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join("; ") });
+      return;
+    }
+    const host = hosts.add({
+      routerSerial: router.serialNumber,
+      routerId: router.id,
+      address: parsed.data.address,
+      name: parsed.data.name ?? "",
+      mac: parsed.data.mac,
+      createdBy: who(req),
+    });
+    audit.log(who(req), "host.add", router.serialNumber, `${host.name || ""} ${host.address}`.trim());
+    res.status(201).json(host);
+  });
+
+  app.patch("/api/hosts/:id", requireTech, (req: Request, res: Response) => {
+    const host = hosts.get(req.params.id);
+    if (!host) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const body = req.body ?? {};
+    if (typeof body.enabled === "boolean") host.enabled = body.enabled;
+    if (typeof body.name === "string") host.name = body.name.slice(0, 80);
+    hosts.save(host);
+    res.json(host);
+  });
+
+  app.delete("/api/hosts/:id", requireTech, (req: Request, res: Response) => {
+    const host = hosts.get(req.params.id);
+    if (!hosts.remove(req.params.id)) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    if (host) {
+      issues.resolve(host.routerSerial, "host-down", `host:${host.address}`);
+      audit.log(who(req), "host.remove", host.routerSerial, host.address);
+    }
+    res.json({ ok: true });
+  });
+
   // ---- live streaming (Server-Sent Events) -----------------------------
   // EventSource can't set headers, so these authenticate via ?token=.
   function openSse(res: Response): void {
@@ -1117,10 +1185,18 @@ export function buildApp(deps: AppDeps): Express {
     const hs = await wg.latestHandshakes().catch(() => ({}) as Record<string, number | null>);
     const live = store.list().filter((r) => r.state !== "staged" && r.state !== "revoked");
     let online = 0;
-    let warning = 0;
+    const degraded: Array<{ id: string; label: string; serialNumber: string; sinceSeconds: number | null }> = [];
     for (const r of live) {
       if (r.health) {
-        if (r.health === "warning") warning++;
+        if (r.health === "warning") {
+          const okMs = r.lastPingOkAt ? Date.parse(r.lastPingOkAt) : null;
+          degraded.push({
+            id: r.id,
+            label: r.label || r.identity || r.serialNumber,
+            serialNumber: r.serialNumber,
+            sinceSeconds: okMs ? Math.round((Date.now() - okMs) / 1000) : null,
+          });
+        }
         if (r.health !== "offline") online++;
       } else {
         const age = hs[r.publicKey] ?? null;
@@ -1135,9 +1211,10 @@ export function buildApp(deps: AppDeps): Express {
     const frame = `data: ${JSON.stringify({
       type: "noc",
       at: new Date().toISOString(),
-      fleet: { online, offline: live.length - online, warning, total: live.length },
+      fleet: { online, offline: live.length - online, warning: degraded.length, total: live.length },
       counts: issues.counts(),
       issues: open,
+      degraded,
       events: events.recent(40),
     })}\n\n`;
     for (const c of nocClients) c.write(frame);
