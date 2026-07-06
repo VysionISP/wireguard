@@ -117,6 +117,34 @@ export interface PingResult {
 export type FetchPingFn = typeof fetchPing;
 
 /**
+ * Parse a RouterOS duration string to milliseconds. RouterOS reports ping
+ * times as compound units — "15ms473us" means 15 ms + 473 µs = 15.473 ms,
+ * "1s200ms" = 1200 ms, "473us" = 0.473 ms. Returns null if nothing parses.
+ */
+export function rosTimeToMs(value: string | undefined | null): number | null {
+  if (!value) return null;
+  // Longer unit tokens first so "ms"/"us"/"ns" win over a bare "s".
+  const re = /(\d+(?:\.\d+)?)(ms|us|µs|ns|s)/g;
+  let m: RegExpExecArray | null;
+  let ms = 0;
+  let matched = false;
+  while ((m = re.exec(value)) !== null) {
+    matched = true;
+    const v = parseFloat(m[1]);
+    switch (m[2]) {
+      case "s": ms += v * 1000; break;
+      case "ms": ms += v; break;
+      case "us":
+      case "µs": ms += v / 1000; break;
+      case "ns": ms += v / 1_000_000; break;
+    }
+  }
+  if (matched) return ms;
+  const n = parseFloat(value); // bare number fallback (assume ms)
+  return Number.isNaN(n) ? null : n;
+}
+
+/**
  * Ask the router to ping an address on its own LAN and summarise the result.
  * This is how we reach *internal* devices (DHCP clients, cameras, APs) that
  * live behind the router and aren't routable from the provisioning server.
@@ -147,9 +175,9 @@ export async function fetchPing(
     const ok = (r.status ?? "") === "" && r.time != null && r.time !== "";
     if (ok) {
       received++;
-      const ms = parseFloat(String(r.time).replace(/[^\d.]/g, ""));
-      if (!Number.isNaN(ms)) {
-        sumMs += /ms/.test(r.time) || !/us|s/.test(r.time) ? ms : ms; // RouterOS reports ms
+      const ms = rosTimeToMs(r.time);
+      if (ms !== null) {
+        sumMs += ms;
         timed++;
       }
     }
