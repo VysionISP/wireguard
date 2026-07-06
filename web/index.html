@@ -404,6 +404,7 @@
     <span class="whoami mono" id="sysclock"></span>
     <div class="spacer"></div>
     <span class="whoami" id="whoami"></span>
+    <button id="nocBtn" title="Open the live NOC wallboard in a new tab">◉ NOC</button>
     <button id="acctBtn">Account</button>
     <button id="reloadBtn">Refresh</button>
     <button id="logoutBtn">Sign out</button>
@@ -2243,6 +2244,7 @@ $("logoutBtn").addEventListener("click", async () => {
   localStorage.removeItem("mtprov.token"); token = ""; showLogin();
 });
 $("reloadBtn").addEventListener("click", () => load().catch((e) => toast(e.message)));
+$("nocBtn").addEventListener("click", () => window.open("/noc?token=" + encodeURIComponent(token), "_blank"));
 $("acctBtn").addEventListener("click", openAccount);
 $("modal").addEventListener("close", stopLiveStream); // stop live stream when modal closes
 $("search").addEventListener("input", render);

@@ -100,6 +100,25 @@ The dashboard talks to the admin API below; anything it does you can also
 script. If you expose it beyond localhost, put it behind the same HTTPS
 reverse proxy as the provisioning endpoints.
 
+## NOC wallboard
+
+`http://<server>:8442/noc` is a stripped-down, full-screen live wallboard for
+a big screen on the wall — **status and faults only**, nothing to click:
+
+- A pulsing banner: green **ALL SYSTEMS OPERATIONAL**, or red/amber with the
+  live count when something is wrong.
+- **Active faults** as cards, critical first then newest — a new fault flashes
+  in and floats to the top. Each shows the device, the message, how long it's
+  been open, and who (if anyone) acknowledged it.
+- A **live event feed** streaming logins, link flaps, on/offline and traffic
+  alerts as they happen.
+- Fleet online / offline / total counts and a connection indicator.
+
+It updates over Server-Sent Events (no manual refresh) and auto-reconnects. The
+**◉ NOC** button in the dashboard header opens it in a new tab, carrying your
+token. For an unattended screen, open `…/noc?token=<admin-or-session-token>`
+directly — the token is saved to the browser and stripped from the address bar.
+
 ## Users & roles
 
 The dashboard supports named accounts with two roles:
@@ -367,6 +386,8 @@ Auth is a **Bearer session token** (from `POST /api/login`) or the legacy
 require the admin role.
 
 | `GET /` | none (UI does client-side auth) | Web dashboard |
+| `GET /noc` | none (page authenticates the stream) | Live NOC wallboard |
+| `GET /api/noc/stream` | tech (via `?token=`) | SSE: faults + live events + fleet counts |
 | `POST /api/login` | none | Exchange username/password for a session token |
 | `POST /api/logout` / `GET /api/me` | tech | End session / current identity |
 | `POST /api/account/password` | tech | Change your own password |

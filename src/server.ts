@@ -59,6 +59,7 @@ interface AuthedRequest extends Request {
 
 // Works from both src/ (tsx dev) and dist/ (build) — web/ sits beside them.
 const WEB_INDEX = fileURLToPath(new URL("../web/index.html", import.meta.url));
+const WEB_NOC = fileURLToPath(new URL("../web/noc.html", import.meta.url));
 
 const registerSchema = z.object({
   token: z.string(),
@@ -1099,6 +1100,50 @@ export function buildApp(deps: AppDeps): Express {
     req.on("close", () => fleetClients.delete(res));
   });
 
+  // NOC wallboard feed: open faults (critical first), a live event ticker and
+  // fleet online/offline counts, pushed to every connected wallboard by one
+  // shared ticker.
+  const nocClients = new Set<Response>();
+  let nocTimer: ReturnType<typeof setInterval> | null = null;
+  async function nocTick(): Promise<void> {
+    if (nocClients.size === 0) return;
+    const hs = await wg.latestHandshakes().catch(() => ({}) as Record<string, number | null>);
+    const live = store.list().filter((r) => r.state !== "staged" && r.state !== "revoked");
+    let online = 0;
+    for (const r of live) {
+      const age = hs[r.publicKey] ?? null;
+      if (age !== null && age < config.monitor.offlineAfterSeconds) online++;
+    }
+    const rank = (s: string) => (s === "critical" ? 0 : 1);
+    const open = issues
+      .list(false)
+      .slice()
+      .sort((a, b) => rank(a.severity) - rank(b.severity) || b.openedAt.localeCompare(a.openedAt));
+    const frame = `data: ${JSON.stringify({
+      type: "noc",
+      at: new Date().toISOString(),
+      fleet: { online, offline: live.length - online, total: live.length },
+      counts: issues.counts(),
+      issues: open,
+      events: events.recent(40),
+    })}\n\n`;
+    for (const c of nocClients) c.write(frame);
+  }
+  app.get("/api/noc/stream", (req: Request, res: Response) => {
+    if (!userFromToken(String(req.query.token ?? ""))) {
+      res.status(401).end();
+      return;
+    }
+    openSse(res);
+    nocClients.add(res);
+    if (!nocTimer) {
+      nocTimer = setInterval(() => void nocTick(), 2500);
+      nocTimer.unref?.();
+    }
+    void nocTick();
+    req.on("close", () => nocClients.delete(res));
+  });
+
   // Per-device deep stats: CPU/mem, interface throughput (bits/sec) and LTE,
   // pushed every ~2s while a client is watching this router.
   app.get("/api/routers/:ref/stream", (req: Request, res: Response) => {
@@ -1421,6 +1466,11 @@ export function buildApp(deps: AppDeps): Express {
   // against the admin API, so serving the shell is harmless.
   app.get("/", (_req: Request, res: Response) => {
     res.sendFile(WEB_INDEX);
+  });
+
+  // The live NOC wallboard — status + faults only, its own full-screen page.
+  app.get("/noc", (_req: Request, res: Response) => {
+    res.sendFile(WEB_NOC);
   });
 
   return app;
