@@ -178,6 +178,8 @@ const configSchema = z.object({
       retentionDays: z.number().int().min(1).default(14),
     })
     .default({}),
+  /** RouterOS upgrade job history. */
+  upgradesPath: z.string().default("data/upgrades.json"),
   /** Append-only upstream-ping samples (JSONL). */
   pingMetricsPath: z.string().default("data/pingmetrics.jsonl"),
   /**

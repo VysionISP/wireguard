@@ -586,6 +586,7 @@
       <button data-sub="tokens">Bootstrap tokens</button>
       <button data-sub="notify">Notifications</button>
       <button data-sub="maint">Maintenance</button>
+      <button data-sub="firmware">Firmware</button>
     </nav>
 
     <!-- CUSTOMERS -->
@@ -724,6 +725,36 @@
     </div>
 
     <!-- MAINTENANCE -->
+    <!-- FIRMWARE -->
+    <div class="subsec hidden" id="set-firmware">
+      <div class="panel" id="fwJobPanel" style="display:none">
+        <div class="panelhead"><h2>Rollout in progress</h2><button id="fwCancelBtn" class="danger gap">Cancel rest</button></div>
+        <div class="pad" id="fwJobBody"></div>
+      </div>
+      <div class="panel">
+        <div class="panelhead"><h2>RouterOS versions</h2><span class="chips" id="fwSummary"></span></div>
+        <div class="pad">
+          <div class="row2" style="margin-bottom:10px">
+            <button id="fwCheckSel">Check selected for updates</button>
+            <button id="fwUpgradeSel" class="primary">Upgrade selected…</button>
+            <label class="chips" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="fwAlsoFw"> also upgrade RouterBOARD firmware (second reboot)</label>
+          </div>
+          <div class="chips" style="margin-bottom:8px">Rollouts run <b>one device at a time</b>: check → install → reboot → wait until it's back and confirm the new version, then move on. Each device gets a temporary maintenance window so the reboot doesn't page anyone.</div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th><input type="checkbox" id="fwAll"></th><th>Device</th><th>Board</th><th>Health</th><th>ROS</th><th>Last check</th><th></th></tr></thead>
+            <tbody id="fwRows"></tbody>
+          </table>
+          <div class="empty hidden" id="fwEmpty">No online routers.</div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Past rollouts</h2>
+        <div class="pad" id="fwHistory"><span class="chips">none yet</span></div>
+      </div>
+    </div>
+
     <div class="subsec hidden" id="set-maint">
       <div class="panel">
         <h2>Schedule maintenance</h2>
@@ -973,6 +1004,7 @@ function showSubTab(sub) {
   if (sub === "tokens") loadTokens();
   if (sub === "notify") loadSettings();
   if (sub === "maint") loadMaintenance();
+  if (sub === "firmware") loadFirmware();
 }
 
 /* ---------------- customers ---------------- */
@@ -1870,6 +1902,11 @@ function renderControls(r) {
   if (online) btns.push(`<button data-act="live" data-ref="${esc(r.id)}">Live stats</button>`);
   if (admin && online) {
     btns.push(`<button data-act="backupnow" data-ref="${esc(r.id)}">Back up now</button>`);
+    const uc = r.updateCheck;
+    const avail = uc && uc.latest && uc.installed && uc.latest !== uc.installed;
+    btns.push(avail
+      ? `<button class="primary" data-act="upgrade" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" title="RouterOS ${esc(uc.installed)} → ${esc(uc.latest)}">Upgrade → ${esc(uc.latest)}</button>`
+      : `<button data-act="upgradecheck" data-ref="${esc(r.id)}">Check updates</button>`);
     btns.push(`<button class="danger" data-act="reboot" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">Reboot</button>`);
   }
   if (admin) btns.push(r.state === "revoked"
@@ -2605,6 +2642,116 @@ async function saveTelegram() {
 /* ---------------- maintenance windows ---------------- */
 function pad2(n) { return String(n).padStart(2, "0"); }
 function toLocalInput(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+/* ---------------- firmware / RouterOS upgrades ---------------- */
+let fwState = { routers: [], sel: new Set(), pollTimer: null };
+async function loadFirmware() {
+  const [routers, jobs] = await Promise.all([
+    api("/api/routers").catch(() => []),
+    api("/api/upgrades").catch(() => []),
+  ]);
+  // Online, registered devices only — you can't upgrade a staged/offline box.
+  fwState.routers = routers.filter((r) => r.tunnelIp && r.state !== "staged" && r.state !== "revoked");
+  renderFirmwareRows();
+  renderFirmwareSummary();
+  renderFirmwareHistory(jobs);
+  const running = jobs.find((j) => j.state === "running");
+  renderFwJob(running || null);
+  if (running) startFwPoll(running.id); else stopFwPoll();
+}
+function renderFirmwareSummary() {
+  const rs = fwState.routers;
+  const avail = rs.filter((r) => r.updateCheck && r.updateCheck.latest && r.updateCheck.installed && r.updateCheck.latest !== r.updateCheck.installed).length;
+  const versions = {};
+  for (const r of rs) versions[r.rosVersion] = (versions[r.rosVersion] || 0) + 1;
+  const spread = Object.entries(versions).sort((a, b) => b[1] - a[1]).map(([v, n]) => `${esc(v)}×${n}`).join(" · ");
+  $("fwSummary").innerHTML = `${rs.length} online · ${avail ? `<b style="color:var(--amber)">${avail} update(s) available</b>` : "no updates flagged"}${spread ? " · " + spread : ""}`;
+}
+function renderFirmwareRows() {
+  const rows = fwState.routers;
+  $("fwEmpty").classList.toggle("hidden", rows.length > 0);
+  $("fwRows").innerHTML = rows.map((r) => {
+    const uc = r.updateCheck;
+    const avail = uc && uc.latest && uc.installed && uc.latest !== uc.installed;
+    const check = !uc ? '<span class="chips">not checked</span>'
+      : avail ? `<span class="pill revoked" title="${esc(uc.status || "")}">→ ${esc(uc.latest)}</span>`
+      : `<span class="chips" title="${esc(uc.status || "")}">up to date · ${esc(fmtAge((Date.now() - Date.parse(uc.at)) / 1000))}</span>`;
+    return `<tr>
+      <td><input type="checkbox" class="fwCk" data-serial="${esc(r.serialNumber)}" ${fwState.sel.has(r.serialNumber) ? "checked" : ""}></td>
+      <td><button class="linkish" data-openref="${esc(r.id)}">${esc(r.label || r.identity || r.serialNumber)}</button><div class="chips">${esc(r.serialNumber)}</div></td>
+      <td class="mono">${esc(r.boardName)}</td>
+      <td>${healthDot(r.health || "up")}</td>
+      <td class="mono">${esc(r.rosVersion)}</td>
+      <td>${check}</td>
+      <td class="actions">
+        <button data-fwcheck="${esc(r.id)}">Check</button>
+        <button class="primary" data-fwup="${esc(r.serialNumber)}" ${avail ? "" : "disabled"} title="${avail ? "" : "no update flagged — run Check first"}">Upgrade</button>
+      </td></tr>`;
+  }).join("");
+}
+function selectedSerials() { return [...$("fwRows").querySelectorAll(".fwCk:checked")].map((c) => c.dataset.serial); }
+async function fwCheck(ref) {
+  try {
+    const c = await api("/api/routers/" + encodeURIComponent(ref) + "/upgrade-check", { method: "POST" });
+    toast(c.updateAvailable ? `Update available: ${c.installed} → ${c.latest}` : `Up to date (${c.installed})`);
+    await loadFirmware();
+  } catch (e) { toast(e.message); }
+}
+async function fwCheckSelected() {
+  const sel = selectedSerials();
+  if (!sel.length) return toast("Tick some devices first");
+  toast(`Checking ${sel.length} device(s)…`);
+  const byId = new Map(fwState.routers.map((r) => [r.serialNumber, r]));
+  for (const s of sel) { const r = byId.get(s); if (r) await api("/api/routers/" + encodeURIComponent(r.id) + "/upgrade-check", { method: "POST" }).catch(() => {}); }
+  toast("Check complete");
+  await loadFirmware();
+}
+async function fwUpgrade(serials) {
+  const list = Array.isArray(serials) ? serials : [serials];
+  if (!list.length) return toast("Tick some devices first");
+  const alsoFirmware = $("fwAlsoFw").checked;
+  if (!confirm(`Upgrade ${list.length} device(s) to the latest RouterOS?${alsoFirmware ? " RouterBOARD firmware will also be upgraded (extra reboot)." : ""}\n\nThey reboot one at a time. This can take a few minutes each.`)) return;
+  try {
+    const job = await api("/api/upgrades", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ refs: list, alsoFirmware }) });
+    toast("Rollout started");
+    renderFwJob(job);
+    startFwPoll(job.id);
+  } catch (e) { toast(e.message); }
+}
+function startFwPoll(id) { stopFwPoll(); fwState.pollTimer = setInterval(() => pollFwJob(id), 3000); }
+function stopFwPoll() { if (fwState.pollTimer) { clearInterval(fwState.pollTimer); fwState.pollTimer = null; } }
+async function pollFwJob(id) {
+  try {
+    const job = await api("/api/upgrades/" + encodeURIComponent(id));
+    renderFwJob(job);
+    if (job.state !== "running") { stopFwPoll(); loadFirmware(); }
+  } catch { stopFwPoll(); }
+}
+const FW_STATE_LABEL = { pending: "queued", checking: "checking", installing: "installing", rebooting: "rebooting", firmware: "firmware", done: "done", skipped: "skipped", failed: "failed", cancelled: "cancelled" };
+function renderFwJob(job) {
+  const panel = $("fwJobPanel");
+  if (!panel) return;
+  if (!job) { panel.style.display = "none"; return; }
+  panel.style.display = "";
+  $("fwCancelBtn").style.display = job.state === "running" ? "" : "none";
+  $("fwCancelBtn").dataset.job = job.id;
+  const done = job.items.filter((i) => ["done", "skipped", "failed", "cancelled"].includes(i.state)).length;
+  $("fwJobBody").innerHTML = `
+    <div class="chips" style="margin-bottom:8px">${done}/${job.items.length} complete · state: <b>${esc(job.state)}</b>${job.alsoFirmware ? " · incl. firmware" : ""}</div>
+    <div class="translist">${job.items.map((i) => {
+      const cls = i.state === "failed" ? "off" : i.state === "done" ? "on" : ["done", "skipped", "failed", "cancelled"].includes(i.state) ? "off" : "warn";
+      const spin = ["checking", "installing", "rebooting", "firmware"].includes(i.state);
+      return `<div><span class="dot ${cls}"></span> <b>${esc(i.label)}</b> — <span class="mono">${esc(FW_STATE_LABEL[i.state] || i.state)}</span>${spin ? ' <span class="chips">●</span>' : ""} ${i.detail ? `<span class="chips">${esc(i.detail)}</span>` : ""}</div>`;
+    }).join("")}</div>`;
+}
+function renderFirmwareHistory(jobs) {
+  const past = jobs.filter((j) => j.state !== "running");
+  $("fwHistory").innerHTML = past.length ? past.slice(0, 8).map((j) => {
+    const ok = j.items.filter((i) => i.state === "done").length;
+    const fail = j.items.filter((i) => i.state === "failed").length;
+    return `<div style="margin-bottom:6px"><span class="chips">${fmtDate(j.createdAt)} · ${esc(j.createdBy)}</span> — ${j.items.length} device(s): <b style="color:var(--green)">${ok} ok</b>${fail ? `, <b style="color:var(--red)">${fail} failed</b>` : ""}${j.state === "cancelled" ? " · cancelled" : ""}</div>`;
+  }).join("") : '<span class="chips">none yet</span>';
+}
+
 async function loadMaintenance() {
   // populate scope value datalist + wire scope select
   const [list, routers, custs] = await Promise.all([
@@ -2774,6 +2921,9 @@ document.addEventListener("click", async (ev) => {
   if (d.tkdel != null) { if (confirm("Delete this token?")) { await api("/api/tokens/" + encodeURIComponent(d.tkdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadTokens(); } return; }
   if (d.usdel != null) { if (confirm(`Remove user ${d.usdel}?`)) { await api("/api/users/" + encodeURIComponent(d.usdel), { method: "DELETE" }).catch((e)=>toast(e.message)); loadUsers(); } return; }
   if (d.usreset != null) { return resetUserPassword(d.usreset); }
+  if (d.openref != null) { return gotoDevice(d.openref); }
+  if (d.fwcheck != null) { return fwCheck(d.fwcheck); }
+  if (d.fwup != null) { return fwUpgrade(d.fwup); }
   if (d.custadd != null) { return addDeviceToCustomer(d.custadd).catch((e) => toast(e.message)); }
   if (d.custedit != null) { return editCustomer(d.custedit); }
   if (d.custpage != null) { return customerStatusPage(d.custpage).catch((e) => toast(e.message)); }
@@ -2819,6 +2969,22 @@ document.addEventListener("click", async (ev) => {
         await api("/api/routers/" + encodeURIComponent(ref) + "/reboot", { method: "POST" });
         toast("Reboot command sent to " + d.serial);
       } finally { btn.disabled = false; btn.textContent = "Reboot"; }
+    }
+    if (act === "upgradecheck") {
+      btn.disabled = true; btn.textContent = "Checking…";
+      try {
+        const c = await api("/api/routers/" + encodeURIComponent(ref) + "/upgrade-check", { method: "POST" });
+        toast(c.updateAvailable ? `Update available: ${c.installed} → ${c.latest}` : `Up to date (${c.installed})`);
+        await refreshManage(ref);
+      } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = "Check updates"; }
+    }
+    if (act === "upgrade") {
+      if (!confirm(`Upgrade ${d.serial} to the latest RouterOS now? It downloads packages and reboots (~1-3 min offline). It's muted for the reboot so it won't page.`)) return;
+      btn.disabled = true; btn.textContent = "Starting…";
+      try {
+        await api("/api/upgrades", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ refs: [d.serial] }) });
+        toast("Upgrade started — watch progress on Settings → Firmware");
+      } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = "Upgrade"; }
     }
     if (act === "verify") {
       btn.disabled = true; btn.textContent = "…";
@@ -2952,6 +3118,10 @@ $("bulkAll").addEventListener("change", updateBulkInfo);
 $("bulkRun").addEventListener("click", runBulk);
 $("tkBtn").addEventListener("click", () => createToken().catch((e) => toast(e.message)));
 $("usBtn").addEventListener("click", addUser);
+$("fwCheckSel").addEventListener("click", () => fwCheckSelected().catch((e) => toast(e.message)));
+$("fwUpgradeSel").addEventListener("click", () => fwUpgrade(selectedSerials()));
+$("fwCancelBtn").addEventListener("click", (e) => { const id = e.target.dataset.job; if (id && confirm("Cancel the remaining devices? The one currently upgrading finishes.")) api("/api/upgrades/" + encodeURIComponent(id) + "/cancel", { method: "POST" }).then(() => toast("Cancelling after current device")).catch((err) => toast(err.message)); });
+$("fwAll").addEventListener("change", (e) => { for (const c of $("fwRows").querySelectorAll(".fwCk")) c.checked = e.target.checked; });
 $("auditReload").addEventListener("click", () => loadAudit().catch((e) => toast(e.message)));
 for (const b of document.querySelectorAll("nav.subtabs button")) b.addEventListener("click", () => showSubTab(b.dataset.sub));
 $("mwScope").addEventListener("change", onMwScopeChange);

@@ -225,7 +225,9 @@ everything you manage on the right.
   **Revoke / Remove**.
 - **Overview** (top tiles) — state, health, uptime, CPU, memory, board,
   ROS + firmware version (with an "upgrade available" flag when the
-  RouterBOARD reports a newer firmware).
+  RouterBOARD reports a newer firmware). Admins get **Check updates** and, once
+  an update is flagged, a one-click **Upgrade → x.y** button right in the
+  header (see Firmware below).
 - **Ports** (top diagram) — a live router faceplate showing every physical
   port with its link status; click a port to set link / inverted-link /
   traffic-threshold monitoring (admin).
@@ -284,6 +286,30 @@ because replaying a full export onto a live device needs human eyes. A **Back
 up now** button in the same view triggers an immediate `/export` over SSH
 (stored only if the config changed) — handy for a snapshot right before you
 make a change.
+
+## RouterOS upgrades
+
+**Settings → Firmware** (admin) is a fleet view of who's running what. Tick
+devices and **Check selected for updates** (runs `check-for-updates` and
+records the result per device), or **Upgrade selected** to roll them out. A
+single device can also be checked/upgraded straight from its device page.
+
+Rollouts run as a **staged job — one device at a time**: check → `update
+install` (the router downloads packages and reboots itself) → wait until it's
+back over the tunnel → confirm the reported version actually changed → move on.
+So a bad build takes out one CPE, not the whole fleet, and you watch it live:
+each device shows queued / checking / installing / rebooting / done, with a
+**Cancel rest** that stops the queue after the current device finishes. Tick
+*also upgrade RouterBOARD firmware* to run `/system routerboard upgrade` +
+a second reboot after the RouterOS bump.
+
+Each device gets a **temporary maintenance window** for the duration so its
+reboot doesn't page anyone, the version bump is written back to the inventory,
+and start/finish land in the device event log (and the audit log). A device
+that doesn't come back within the timeout is marked failed and left for you to
+look at — the rollout continues past it. Only one rollout runs at a time; job
+history is kept under `upgradesPath`. Timeouts/poll cadence aren't hand-tuned
+in config (sensible defaults: ~12 min online-wait, 10 s poll).
 
 ## Status board & device monitoring
 
@@ -566,6 +592,10 @@ require the admin role.
 | `POST /api/routers/:ref/verify` | tech | Handshake + REST reachability check; marks `verified` |
 | `POST /api/routers/:ref/reboot` | admin | Reboot the device over the tunnel (`/system/reboot`); logs a device event |
 | `POST /api/routers/:ref/exec` | admin | Run one RouterOS command over SSH and return its output |
+| `POST /api/routers/:ref/upgrade-check` | admin | Check for a RouterOS update; records the result on the device |
+| `POST /api/upgrades` | admin | Start a staged RouterOS rollout over `{refs, alsoFirmware}` |
+| `GET /api/upgrades` / `GET /api/upgrades/:id` | tech | Rollout jobs + live per-device progress |
+| `POST /api/upgrades/:id/cancel` | admin | Stop a running rollout after the current device |
 | `GET /api/routers/:ref/live` | tech | Live stats over the tunnel (system, interfaces, LTE) |
 | `GET /api/routers/:ref/profile` | tech | Live profile: DHCP leases, IP addresses, health, firmware |
 | `GET /api/routers/:ref/traffic?hours=` | tech | Traffic history + previous-period comparison from stored metrics |

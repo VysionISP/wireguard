@@ -16,6 +16,7 @@ export type EventType =
   | "offline"
   | "online"
   | "backup"
+  | "upgrade"
   | "monitor-error";
 
 export interface DeviceEvent {

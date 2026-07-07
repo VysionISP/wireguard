@@ -32,6 +32,7 @@ import { OutageStore } from "./outages.js";
 import { computeSla, type Span } from "./sla.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn, type SshShellFn } from "./ssh.js";
 import { ConsoleManager } from "./console.js";
+import { UpgradeManager, updateAvailable } from "./upgrade.js";
 import { rebootRouter, type RebootFn } from "./routeros.js";
 import { defaultMonitoring, effectivePorts, upstreamTargets, DEFAULT_UPSTREAM_TARGETS, MAX_UPSTREAM_TARGETS, type RouterRecord, type DeviceType } from "./types.js";
 
@@ -67,6 +68,8 @@ export interface AppDeps {
   customers?: CustomerStore;
   sshRun?: SshRunFn;
   shell?: SshShellFn;
+  /** Test knobs for the upgrade job runner. */
+  upgrade?: { pollMs?: number; onlineTimeoutMs?: number };
   sftpPut?: SftpPutFn;
   reboot?: RebootFn;
 }
@@ -132,6 +135,7 @@ export function buildApp(deps: AppDeps): Express {
   const customers = deps.customers ?? new CustomerStore(config.customersPath);
   const sshRun = deps.sshRun ?? realSshRun;
   const consoles = new ConsoleManager(deps.shell);
+  const upgradeCfg = deps.upgrade ?? {};
   const reboot = deps.reboot ?? rebootRouter;
   const sftpPut = deps.sftpPut ?? realSftpPut;
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
@@ -145,6 +149,11 @@ export function buildApp(deps: AppDeps): Express {
     deps.pings ?? new PingMetricsStore(config.pingMetricsPath, config.upstreamPing.retentionDays * 24 * 3600_000);
   const hosts = deps.hosts ?? new HostStore(config.hostsPath);
   const maintenance = deps.maintenance ?? new MaintenanceStore(config.maintenancePath);
+  const upgrades = new UpgradeManager({
+    store, events, maintenance, sshRun,
+    pollMs: upgradeCfg.pollMs, onlineTimeoutMs: upgradeCfg.onlineTimeoutMs,
+    filePath: config.upgradesPath,
+  });
   const outages = deps.outages ?? new OutageStore(config.outagesPath);
 
   // Serialises the register critical section so concurrent phone-homes can't
@@ -1898,6 +1907,64 @@ export function buildApp(deps: AppDeps): Express {
     } catch (err) {
       res.status(502).json({ error: `command failed: ${(err as Error).message}` });
     }
+  });
+
+  // ---- RouterOS upgrades: check, staged rollout jobs ---------------------
+  app.post("/api/routers/:ref/upgrade-check", requireAdmin, async (req: Request, res: Response) => {
+    const router = onlineRouter(req.params.ref, res);
+    if (!router) return;
+    try {
+      const c = await upgrades.check(router);
+      audit.log(who(req), "upgrade-check", router.serialNumber, `${c.installed} -> ${c.latest || "?"}`);
+      res.json({ ...c, updateAvailable: updateAvailable(c) });
+    } catch (err) {
+      res.status(502).json({ error: `check failed: ${(err as Error).message}` });
+    }
+  });
+
+  app.post("/api/upgrades", requireAdmin, (req: Request, res: Response) => {
+    const parsed = z
+      .object({ refs: z.array(z.string()).min(1).max(500), alsoFirmware: z.boolean().optional() })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid request" });
+      return;
+    }
+    if (upgrades.busy()) {
+      res.status(409).json({ error: "an upgrade job is already running - wait for it to finish or cancel it" });
+      return;
+    }
+    const routers = parsed.data.refs.flatMap((ref) => store.find(ref) ?? []);
+    const runnable = routers.filter((r) => r.tunnelIp && r.state !== "staged" && r.state !== "revoked");
+    if (!runnable.length) {
+      res.status(400).json({ error: "no online targets" });
+      return;
+    }
+    const job = upgrades.start(runnable, who(req), parsed.data.alsoFirmware ?? false);
+    audit.log(who(req), "upgrade", `${runnable.length} router(s)`, runnable.map((r) => r.serialNumber).join(", "));
+    res.json(job);
+  });
+
+  app.get("/api/upgrades", requireTech, (_req: Request, res: Response) => {
+    res.json(upgrades.list());
+  });
+
+  app.get("/api/upgrades/:id", requireTech, (req: Request, res: Response) => {
+    const job = upgrades.get(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    res.json(job);
+  });
+
+  app.post("/api/upgrades/:id/cancel", requireAdmin, (req: Request, res: Response) => {
+    if (!upgrades.cancel(req.params.id)) {
+      res.status(404).json({ error: "no running job with that id" });
+      return;
+    }
+    audit.log(who(req), "upgrade-cancel", req.params.id);
+    res.json({ ok: true });
   });
 
   // ---- live interactive console (real RouterOS CLI over an SSH PTY)

@@ -58,6 +58,8 @@ export interface RouterRecord {
   monitoring?: DeviceMonitoring;
   /** Internal bookkeeping for the device monitor; not user-facing. */
   monState?: DeviceMonState;
+  /** Last RouterOS update check ran from the dashboard. */
+  updateCheck?: { at: string; channel: string; installed: string; latest: string; status: string };
 }
 
 /** Per-port monitoring rule. A device watches zero or more of these. */
