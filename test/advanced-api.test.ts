@@ -284,6 +284,29 @@ describe("password management", () => {
     expect((await request(app).post("/api/login").send({ username: "dave", password: reset.body.password })).status).toBe(200);
   });
 
+  it("admin can set a chosen password instead of generating one", async () => {
+    users.add("frank", "frankpass1", "tech");
+    const reset = await req("post", "/api/users/frank/password").send({ password: "chosenPw123" });
+    expect(reset.status).toBe(200);
+    expect(reset.body.password).toBe("chosenPw123");
+    expect((await request(app).post("/api/login").send({ username: "frank", password: "chosenPw123" })).status).toBe(200);
+  });
+
+  it("rejects a chosen password that is too short", async () => {
+    users.add("grace", "gracepass1", "tech");
+    const reset = await req("post", "/api/users/grace/password").send({ password: "short" });
+    expect(reset.status).toBe(400);
+    // the old password still works since the reset was rejected
+    expect((await request(app).post("/api/login").send({ username: "grace", password: "gracepass1" })).status).toBe(200);
+  });
+
+  it("admin can create a user with a chosen password", async () => {
+    const created = await req("post", "/api/users").send({ username: "heidi", role: "tech", password: "createdPw123" });
+    expect(created.status).toBe(200);
+    expect(created.body.password).toBe("createdPw123");
+    expect((await request(app).post("/api/login").send({ username: "heidi", password: "createdPw123" })).status).toBe(200);
+  });
+
   it("password reset is admin-only", async () => {
     users.add("erin", "erinpass1", "tech");
     const login = await request(app).post("/api/login").send({ username: "erin", password: "erinpass1" });

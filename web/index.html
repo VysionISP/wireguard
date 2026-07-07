@@ -2266,6 +2266,7 @@ async function addUser() {
   const password = $("usPass").value;
   const role = $("usRole").value;
   if (!username) return toast("Enter a username");
+  if (password && password.length < 8) return toast("Password must be at least 8 characters (or leave it blank to generate one)");
   try {
     const r = await api("/api/users", {
       method: "POST", headers: { "content-type": "application/json" },
@@ -2282,16 +2283,37 @@ async function addUser() {
   } catch (e) { toast(e.message); }
 }
 
-async function resetUserPassword(username) {
-  if (!confirm(`Reset ${username}'s password? Their current sessions end and a new password is generated.`)) return;
+function resetUserPassword(username) {
+  $("mTitle").textContent = "Set / reset password";
+  $("mBody").innerHTML = `
+    <p class="chips">New password for <b>${esc(username)}</b>. Any active sessions they have are signed out immediately.</p>
+    <div class="meta">
+      <label for="rpPass">New password <span class="chips">(min 8 chars — leave blank to generate a strong one)</span></label>
+      <input id="rpPass" type="text" autocomplete="new-password" placeholder="type a password, or leave blank to generate">
+      <div class="row2" style="margin-top:10px">
+        <button class="primary" id="rpSet">Set password</button>
+        <button id="rpGen">Generate random</button>
+      </div>
+    </div>`;
+  $("modal").showModal();
+  $("rpSet").addEventListener("click", () => submitUserPassword(username, $("rpPass").value));
+  $("rpGen").addEventListener("click", () => submitUserPassword(username, ""));
+  $("rpPass").addEventListener("keydown", (e) => { if (e.key === "Enter") submitUserPassword(username, $("rpPass").value); });
+  $("rpPass").focus();
+}
+async function submitUserPassword(username, pw) {
+  pw = (pw || "").trim();
+  if (pw && pw.length < 8) return toast("Password must be at least 8 characters");
   try {
-    const r = await api("/api/users/" + encodeURIComponent(username) + "/password", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-    $("mTitle").textContent = "Password reset";
+    const r = await api("/api/users/" + encodeURIComponent(username) + "/password", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(pw ? { password: pw } : {}),
+    });
+    $("mTitle").textContent = "Password updated";
     $("mBody").innerHTML = `<p>New password for <b>${esc(r.username)}</b>:</p>
       <div class="cred"><div class="row"><span>password</span><code class="mono">${esc(r.password)}</code>
       <button data-copy="${esc(r.password)}">Copy</button></div></div>
-      <p class="chips" style="margin-top:8px">Shown once — share it securely.</p>`;
-    $("modal").showModal();
+      <p class="chips" style="margin-top:8px">Shown once — share it securely. Their old sessions have been signed out.</p>`;
   } catch (e) { toast(e.message); }
 }
 
