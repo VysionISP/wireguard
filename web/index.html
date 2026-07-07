@@ -1924,8 +1924,13 @@ function renderOverview(r, prof) {
     const res = prof.resource;
     const memPct = res.totalMemory ? ((res.totalMemory - res.freeMemory) / res.totalMemory) * 100 : 0;
     const rb = prof.routerboard;
-    const upgrade = rb && rb.upgradeAvailable && rb.upgradeAvailable !== rb.firmware
-      ? `<span class="pill revoked" title="firmware upgrade available">upgrade → ${esc(rb.upgradeAvailable)}</span>` : "";
+    // RouterBOARD (bootloader) firmware is separate from the RouterOS version.
+    // When RouterOS is upgraded the board firmware often lags until you run
+    // /system routerboard upgrade — that's this, NOT a RouterOS update.
+    const fwBehind = rb && rb.upgradeAvailable && rb.firmware && rb.upgradeAvailable !== rb.firmware;
+    const fwNote = fwBehind
+      ? `<div class="chips" style="margin-top:4px">RouterBOARD firmware <span class="mono">${esc(rb.firmware)}</span> → <span class="mono">${esc(rb.upgradeAvailable)}</span> <span class="dim">(bootloader firmware, not RouterOS — RouterOS is already ${esc(res.version)})</span> ${isAdmin() ? `<button class="primary" data-act="fwupgrade" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" style="margin-left:6px">Upgrade board firmware</button>` : ""}</div>`
+      : "";
     el.innerHTML = `<div class="signal">
       ${signalTile("State", r.state)}
       ${r.health ? `<div class="s"><div class="v" style="font-size:14px">${healthPill}</div><div class="k">Health</div></div>` : ""}
@@ -1933,9 +1938,9 @@ function renderOverview(r, prof) {
       ${signalTile("CPU", res.cpoLoad != null ? res.cpoLoad + "%" : res.cpuLoad + "%", res.cpuLoad)}
       ${signalTile("Memory", fmtBytes(res.totalMemory - res.freeMemory) + " / " + fmtBytes(res.totalMemory), memPct)}
       ${signalTile("Board", res.boardName)}
-      ${signalTile("ROS", res.version)}
-      ${rb ? signalTile("Firmware", rb.firmware) : ""}
-    </div>${upgrade ? `<div class="chips" style="margin-top:4px">${upgrade}</div>` : ""}`;
+      ${signalTile("RouterOS", res.version)}
+      ${rb ? signalTile("Board FW", rb.firmware) : ""}
+    </div>${fwNote}`;
   } else {
     el.innerHTML = `<div class="signal">
       ${signalTile("State", r.state)}
@@ -2985,6 +2990,14 @@ document.addEventListener("click", async (ev) => {
         await api("/api/upgrades", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ refs: [d.serial] }) });
         toast("Upgrade started — watch progress on Settings → Firmware");
       } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = "Upgrade"; }
+    }
+    if (act === "fwupgrade") {
+      if (!confirm(`Upgrade the RouterBOARD firmware on ${d.serial}? This is the bootloader firmware (not RouterOS). It runs /system routerboard upgrade and reboots (~1-3 min offline), muted so it won't page.`)) return;
+      btn.disabled = true; btn.textContent = "Starting…";
+      try {
+        await api("/api/upgrades", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ refs: [d.serial], firmwareOnly: true }) });
+        toast("Board-firmware upgrade started — watch progress on Settings → Firmware");
+      } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = "Upgrade board firmware"; }
     }
     if (act === "verify") {
       btn.disabled = true; btn.textContent = "…";

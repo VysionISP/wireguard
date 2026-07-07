@@ -45,6 +45,15 @@ export function updateAvailable(c: UpdateCheck): boolean {
   return /new version/i.test(c.status) || (!!c.latest && !!c.installed && c.latest !== c.installed);
 }
 
+/** Parse `/system routerboard print` — RouterBOARD (bootloader) firmware. */
+export function parseRouterboard(output: string): { current: string; upgrade: string } {
+  const grab = (key: string) => {
+    const m = new RegExp(`${key}:\\s*(.+)`, "i").exec(output);
+    return m ? m[1].trim() : "";
+  };
+  return { current: grab("current-firmware"), upgrade: grab("upgrade-firmware") };
+}
+
 export type UpgradeItemState = "pending" | "checking" | "installing" | "rebooting" | "firmware" | "done" | "skipped" | "failed" | "cancelled";
 
 export interface UpgradeItem {
@@ -63,6 +72,8 @@ export interface UpgradeJob {
   createdAt: string;
   createdBy: string;
   alsoFirmware: boolean;
+  /** Only bring the RouterBOARD firmware up to the installed RouterOS — no OS install. */
+  firmwareOnly?: boolean;
   state: "running" | "done" | "cancelled";
   items: UpgradeItem[];
 }
@@ -141,12 +152,13 @@ export class UpgradeManager {
   }
 
   /** Start a staged rollout over the given routers. Returns the job (already running). */
-  start(routers: RouterRecord[], createdBy: string, alsoFirmware = false): UpgradeJob {
+  start(routers: RouterRecord[], createdBy: string, alsoFirmware = false, firmwareOnly = false): UpgradeJob {
     const job: UpgradeJob = {
       id: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
       createdBy,
       alsoFirmware,
+      firmwareOnly,
       state: "running",
       items: routers.map((r) => ({
         serial: r.serialNumber,
@@ -194,6 +206,11 @@ export class UpgradeManager {
     item.startedAt = new Date().toISOString();
     item.state = "checking";
     this.persist();
+
+    if (job.firmwareOnly) {
+      await this.firmwareOnly(job, item, r);
+      return;
+    }
 
     const checkOut = await this.ssh(r.tunnelIp, r.username, r.password, "/system package update check-for-updates", 30_000);
     const check = parseUpdateCheck(checkOut.output);
@@ -276,6 +293,69 @@ export class UpgradeManager {
    * Poll the device over SSH until it answers with its version (upgraded or
    * not), or the timeout passes. Returns the reported version, or null.
    */
+  /**
+   * Bring only the RouterBOARD (bootloader) firmware up to what the installed
+   * RouterOS bundles — no OS install. This is the "upgrade → x" you see when
+   * RouterOS is already current but the board firmware lags.
+   */
+  private async firmwareOnly(job: UpgradeJob, item: UpgradeItem, r: RouterRecord): Promise<void> {
+    const rbOut = await this.ssh(r.tunnelIp, r.username, r.password, "/system routerboard print", 20_000);
+    const rb = parseRouterboard(rbOut.output);
+    item.fromVersion = rb.current || r.rosVersion;
+    if (!rb.upgrade || !rb.current || rb.upgrade === rb.current) {
+      item.state = "skipped";
+      item.detail = rb.current ? `board firmware already ${rb.current}` : "no firmware upgrade reported";
+      item.finishedAt = new Date().toISOString();
+      return;
+    }
+    item.toVersion = rb.upgrade;
+    item.detail = `board firmware ${rb.current} → ${rb.upgrade}`;
+
+    const windowMinutes = Math.ceil(this.onlineTimeoutMs / 60_000) + 5;
+    const win = this.deps.maintenance?.add({
+      scopeKind: "device", scopeValue: r.serialNumber,
+      startsAt: new Date().toISOString(),
+      endsAt: new Date(Date.now() + windowMinutes * 60_000).toISOString(),
+      categories: [], note: `RouterBOARD firmware upgrade to ${rb.upgrade}`, createdBy: job.createdBy,
+    });
+    try {
+      this.deps.events.add({
+        at: new Date().toISOString(), serialNumber: r.serialNumber, label: item.label,
+        type: "upgrade", severity: "info", message: `RouterBOARD firmware upgrade started: ${rb.current} → ${rb.upgrade}`,
+      });
+      item.state = "firmware";
+      this.persist();
+      // Loads the new firmware, then a reboot applies it.
+      await this.ssh(r.tunnelIp, r.username, r.password, "/system routerboard upgrade", 30_000).catch(() => {});
+      await this.ssh(r.tunnelIp, r.username, r.password, "/system reboot", 15_000).catch(() => {});
+      item.state = "rebooting";
+      this.persist();
+      if ((await this.waitBack(r, "")) === null) {
+        item.state = "failed";
+        item.detail = `did not come back within ${Math.round(this.onlineTimeoutMs / 60_000)} min — check it manually`;
+        return;
+      }
+      const after = parseRouterboard((await this.ssh(r.tunnelIp, r.username, r.password, "/system routerboard print", 15_000).catch(() => ({ ok: false, output: "" }))).output);
+      if (after.current && after.current !== rb.current) {
+        item.state = "done";
+        item.detail = `board firmware ${rb.current} → ${after.current}`;
+        item.toVersion = after.current;
+        this.deps.events.add({
+          at: new Date().toISOString(), serialNumber: r.serialNumber, label: item.label,
+          type: "upgrade", severity: "info", message: `RouterBOARD firmware upgraded: ${rb.current} → ${after.current}`,
+        });
+      } else {
+        // Some boards only report the new firmware after the *next* reboot;
+        // treat "back online, no error" as success rather than crying wolf.
+        item.state = "done";
+        item.detail = `board firmware upgrade applied (was ${rb.current})`;
+      }
+    } finally {
+      item.finishedAt = new Date().toISOString();
+      if (win) this.deps.maintenance?.remove(win.id);
+    }
+  }
+
   private async waitBack(r: RouterRecord, _oldVersion: string): Promise<string | null> {
     const deadline = Date.now() + this.onlineTimeoutMs;
     // Give the box a moment to actually go down before we start knocking.

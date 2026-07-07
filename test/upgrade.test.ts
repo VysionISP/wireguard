@@ -1,7 +1,7 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
-import { UpgradeManager, parseUpdateCheck, updateAvailable } from "../src/upgrade.js";
+import { UpgradeManager, parseUpdateCheck, parseRouterboard, updateAvailable } from "../src/upgrade.js";
 import { RouterStore } from "../src/store.js";
 import { EventLog } from "../src/events.js";
 import { MaintenanceStore } from "../src/maintenance.js";
@@ -27,6 +27,17 @@ describe("parseUpdateCheck", () => {
     expect(c).toEqual({ channel: "stable", installed: "7.14.2", latest: "7.16", status: "New version is available" });
     expect(updateAvailable(c)).toBe(true);
     expect(updateAvailable(parseUpdateCheck(CHECK_CURRENT))).toBe(false);
+  });
+});
+
+describe("parseRouterboard", () => {
+  it("reads current + upgrade board firmware (separate from RouterOS)", () => {
+    const out = `       routerboard: yes
+             model: hAP ax^2
+     serial-number: HGR
+  current-firmware: 7.16.2
+  upgrade-firmware: 7.23.2`;
+    expect(parseRouterboard(out)).toEqual({ current: "7.16.2", upgrade: "7.23.2" });
   });
 });
 
@@ -129,6 +140,42 @@ describe("UpgradeManager", () => {
     expect(i1.state).toBe("failed");
     expect(i1.detail).toContain("did not come back");
     expect(i2.state).toBe("done"); // the rollout continues past a failure
+  });
+
+  it("firmwareOnly upgrades just the RouterBOARD firmware, leaving RouterOS alone", async () => {
+    store.save(router("DEV1", "10.99.0.9"));
+    let upgraded = false;
+    const calls: string[] = [];
+    const sshRun: SshRunFn = async (_h, _u, _p, command) => {
+      calls.push(command);
+      if (command.includes("routerboard print")) {
+        return { ok: true, output: `  current-firmware: ${upgraded ? "7.23.2" : "7.16.2"}\n  upgrade-firmware: 7.23.2` };
+      }
+      if (command.includes("routerboard upgrade")) { upgraded = true; return { ok: true, output: "" }; }
+      if (command.includes("resource print")) return { ok: true, output: "  version: 7.23.2 (stable)" };
+      return { ok: true, output: "" };
+    };
+    const mgr = new UpgradeManager({ store, events, maintenance: maint, sshRun, pollMs: 10, onlineTimeoutMs: 1000 });
+    const job = mgr.start([store.findBySerial("DEV1")!], "tester", false, true);
+    await waitJob(mgr, job.id);
+    const item = mgr.get(job.id)!.items[0];
+    expect(item.state).toBe("done");
+    expect(item.detail).toBe("board firmware 7.16.2 → 7.23.2");
+    // No RouterOS package install happened — only the board firmware path.
+    expect(calls.some((c) => c.includes("package update install"))).toBe(false);
+    expect(calls.some((c) => c.includes("routerboard upgrade"))).toBe(true);
+  });
+
+  it("firmwareOnly skips when board firmware already matches", async () => {
+    store.save(router("DEV1", "10.99.0.9"));
+    const sshRun: SshRunFn = async (_h, _u, _p, command) => {
+      if (command.includes("routerboard print")) return { ok: true, output: "  current-firmware: 7.23.2\n  upgrade-firmware: 7.23.2" };
+      return { ok: true, output: "" };
+    };
+    const mgr = new UpgradeManager({ store, events, maintenance: maint, sshRun, pollMs: 10, onlineTimeoutMs: 300 });
+    const job = mgr.start([store.findBySerial("DEV1")!], "tester", false, true);
+    await waitJob(mgr, job.id);
+    expect(mgr.get(job.id)!.items[0].state).toBe("skipped");
   });
 
   it("cancel stops the remaining queue", async () => {

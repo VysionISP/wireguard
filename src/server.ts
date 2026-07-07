@@ -1924,7 +1924,7 @@ export function buildApp(deps: AppDeps): Express {
 
   app.post("/api/upgrades", requireAdmin, (req: Request, res: Response) => {
     const parsed = z
-      .object({ refs: z.array(z.string()).min(1).max(500), alsoFirmware: z.boolean().optional() })
+      .object({ refs: z.array(z.string()).min(1).max(500), alsoFirmware: z.boolean().optional(), firmwareOnly: z.boolean().optional() })
       .safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "invalid request" });
@@ -1940,8 +1940,8 @@ export function buildApp(deps: AppDeps): Express {
       res.status(400).json({ error: "no online targets" });
       return;
     }
-    const job = upgrades.start(runnable, who(req), parsed.data.alsoFirmware ?? false);
-    audit.log(who(req), "upgrade", `${runnable.length} router(s)`, runnable.map((r) => r.serialNumber).join(", "));
+    const job = upgrades.start(runnable, who(req), parsed.data.alsoFirmware ?? false, parsed.data.firmwareOnly ?? false);
+    audit.log(who(req), parsed.data.firmwareOnly ? "firmware-upgrade" : "upgrade", `${runnable.length} router(s)`, runnable.map((r) => r.serialNumber).join(", "));
     res.json(job);
   });
 
