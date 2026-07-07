@@ -30,7 +30,8 @@ import { HostStore } from "./hosts.js";
 import { MaintenanceStore, MAINT_CATEGORIES, maintCategory, type MaintCategory } from "./maintenance.js";
 import { OutageStore } from "./outages.js";
 import { computeSla, type Span } from "./sla.js";
-import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
+import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn, type SshShellFn } from "./ssh.js";
+import { ConsoleManager } from "./console.js";
 import { rebootRouter, type RebootFn } from "./routeros.js";
 import { defaultMonitoring, effectivePorts, upstreamTargets, DEFAULT_UPSTREAM_TARGETS, MAX_UPSTREAM_TARGETS, type RouterRecord, type DeviceType } from "./types.js";
 
@@ -65,6 +66,7 @@ export interface AppDeps {
   topology?: TopologyStore;
   customers?: CustomerStore;
   sshRun?: SshRunFn;
+  shell?: SshShellFn;
   sftpPut?: SftpPutFn;
   reboot?: RebootFn;
 }
@@ -129,6 +131,7 @@ export function buildApp(deps: AppDeps): Express {
   const topology = deps.topology ?? new TopologyStore(config.topologyPath);
   const customers = deps.customers ?? new CustomerStore(config.customersPath);
   const sshRun = deps.sshRun ?? realSshRun;
+  const consoles = new ConsoleManager(deps.shell);
   const reboot = deps.reboot ?? rebootRouter;
   const sftpPut = deps.sftpPut ?? realSftpPut;
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
@@ -1897,6 +1900,69 @@ export function buildApp(deps: AppDeps): Express {
     }
   });
 
+  // ---- live interactive console (real RouterOS CLI over an SSH PTY)
+  app.post("/api/routers/:ref/console", requireAdmin, async (req: Request, res: Response) => {
+    const router = onlineRouter(req.params.ref, res);
+    if (!router) return;
+    const cols = Math.min(500, Math.max(20, Number((req.body ?? {}).cols) || 120));
+    const rows = Math.min(200, Math.max(5, Number((req.body ?? {}).rows) || 32));
+    try {
+      const sid = await consoles.open(router.tunnelIp, router.username, router.password, router.serialNumber, cols, rows);
+      audit.log(who(req), "console", router.serialNumber, "session opened");
+      res.json({ sid });
+    } catch (err) {
+      res.status(502).json({ error: `console failed: ${(err as Error).message}` });
+    }
+  });
+
+  // SSE side of the console; token rides the query string (EventSource can't
+  // set headers). Admin only, same as opening the session.
+  app.get("/api/console/:sid/stream", (req: Request, res: Response) => {
+    const user = userFromToken(String(req.query.token ?? ""));
+    if (!user || user.role !== "admin") {
+      res.status(401).end();
+      return;
+    }
+    openSse(res);
+    if (!consoles.attach(req.params.sid, res)) {
+      res.write(`data: ${JSON.stringify({ end: "no such session" })}\n\n`);
+      res.end();
+    }
+  });
+
+  app.post("/api/console/:sid/input", requireAdmin, (req: Request, res: Response) => {
+    const data = String((req.body ?? {}).data ?? "");
+    if (!data) {
+      res.status(400).json({ error: "data required" });
+      return;
+    }
+    if (!consoles.input(req.params.sid, data)) {
+      res.status(404).json({ error: "no such session" });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  app.post("/api/console/:sid/resize", requireAdmin, (req: Request, res: Response) => {
+    const cols = Math.min(500, Math.max(20, Number((req.body ?? {}).cols) || 0));
+    const rows = Math.min(200, Math.max(5, Number((req.body ?? {}).rows) || 0));
+    if (!consoles.resize(req.params.sid, cols, rows)) {
+      res.status(404).json({ error: "no such session" });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/console/:sid", requireAdmin, (req: Request, res: Response) => {
+    const serial = consoles.serialOf(req.params.sid);
+    if (!consoles.close(req.params.sid)) {
+      res.status(404).json({ error: "no such session" });
+      return;
+    }
+    audit.log(who(req), "console", serial ?? "?", "session closed");
+    res.json({ ok: true });
+  });
+
   app.post("/api/bulk", requireAdmin, async (req: Request, res: Response) => {
     const parsed = z
       .object({
@@ -1996,6 +2062,13 @@ export function buildApp(deps: AppDeps): Express {
   app.get("/noc", (_req: Request, res: Response) => {
     res.sendFile(WEB_NOC);
   });
+
+  // Vendored terminal-emulator assets for the device console (self-hosted, no CDN).
+  for (const f of ["xterm.js", "xterm.css", "addon-fit.js"]) {
+    app.get(`/vendor/${f}`, (_req: Request, res: Response) => {
+      res.sendFile(fileURLToPath(new URL(`../web/vendor/${f}`, import.meta.url)));
+    });
+  }
 
   return app;
 }

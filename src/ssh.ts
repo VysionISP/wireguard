@@ -42,6 +42,62 @@ function connect(host: string, username: string, password: string, timeoutMs: nu
   });
 }
 
+/** A live interactive shell channel to a router (PTY over SSH). */
+export interface ShellSession {
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  close(): void;
+  onData(cb: (chunk: Buffer) => void): void;
+  onClose(cb: () => void): void;
+}
+
+export type SshShellFn = (
+  host: string,
+  username: string,
+  password: string,
+  cols: number,
+  rows: number,
+  timeoutMs?: number,
+) => Promise<ShellSession>;
+
+/**
+ * Opens an interactive PTY shell on a RouterOS device — the real CLI, with
+ * its own tab-completion, `?` help and menu system. The web console streams
+ * this channel to the browser.
+ */
+export const sshShell: SshShellFn = async (host, username, password, cols, rows, timeoutMs = 15000) => {
+  const conn = await connect(host, username, password, timeoutMs);
+  return await new Promise<ShellSession>((resolve, reject) => {
+    conn.shell({ term: "xterm-256color", cols, rows }, (err, stream) => {
+      if (err) {
+        conn.end();
+        return reject(err);
+      }
+      const dataCbs: Array<(chunk: Buffer) => void> = [];
+      const closeCbs: Array<() => void> = [];
+      stream.on("data", (d: Buffer) => dataCbs.forEach((cb) => cb(d)));
+      stream.stderr.on("data", (d: Buffer) => dataCbs.forEach((cb) => cb(d)));
+      const done = () => {
+        closeCbs.forEach((cb) => cb());
+        closeCbs.length = 0;
+        conn.end();
+      };
+      stream.on("close", done);
+      conn.on("error", done);
+      resolve({
+        write: (data) => stream.write(data),
+        resize: (c, r) => stream.setWindow(r, c, 0, 0),
+        close: () => {
+          stream.end();
+          conn.end();
+        },
+        onData: (cb) => dataCbs.push(cb),
+        onClose: (cb) => closeCbs.push(cb),
+      });
+    });
+  });
+};
+
 /** Runs one command on a RouterOS device over SSH, capturing all output. */
 export const sshRun: SshRunFn = async (host, username, password, command, timeoutMs = 20000) => {
   const conn = await connect(host, username, password, timeoutMs);

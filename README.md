@@ -254,15 +254,15 @@ everything you manage on the right.
   by the port diagram at the top);
   and the config-backup list with diff / restore. Saving details or monitoring
   refreshes the panel in place without leaving the page.
-- **Console** (admin, full width at the bottom) — a terminal that CLIs into the
-  router over SSH and behaves like the real MikroTik CLI: bare menu words
-  navigate (`ip` → `service` → `print`), `..` goes up, `/` returns to the
-  root, and `/ip address print` runs absolute without changing your menu; the
-  prompt shows where you are (`[identity] /ip service >`). ↑/↓ recall
-  history, `clear` wipes the screen. Under the hood each executed line is one
-  stateless SSH exec of the fully-resolved path — navigation is validated
-  against the router so a typo errors instead of "entering" a menu that
-  doesn't exist — and every command is audit-logged server-side.
+- **Console** (admin, full width at the bottom) — the *actual* RouterOS CLI:
+  the server opens a persistent SSH PTY to the router and streams it to an
+  in-page terminal (a self-hosted xterm.js — no CDN). Tab completion, `?`
+  help, colours, menus, safe mode — everything behaves exactly like ssh'ing
+  in, because it is the router's own shell. Keystrokes ride ordered POSTs;
+  output streams over SSE and survives brief reconnects (the scrollback
+  replays). Sessions close when you leave the page and are reaped after 15
+  minutes idle; opening and closing a console is audit-logged (individual
+  keystrokes are not).
 
 Traffic history is stored in `data/metrics.jsonl` and pruned to
 `metrics.retentionDays` (default 14). Sampling cadence and retention are set

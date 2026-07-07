@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Korvix · Network Control</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
 <style>
   /* ============================================================
      Industrial NOC console theme — committed dark. Instrument
@@ -217,15 +218,10 @@
   .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; align-items: start; }
   @media (max-width: 860px) { .pgrid { grid-template-columns: 1fr; } }
   .pcol { min-width: 0; }
-  .term { background: #04070a; border: 1px solid var(--border2); border-radius: 3px; padding: 8px 11px; margin-top: 6px; height: 320px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
-  .tline { white-space: pre-wrap; word-break: break-word; color: var(--text); }
-  .tline.cmd { color: var(--accent); }
-  .tline.err { color: var(--red); }
-  .tline.dim { color: var(--muted); }
-  .termbar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-  .termbar .tprompt { font-family: var(--mono); font-size: 12px; color: var(--green); white-space: nowrap; }
-  .termbar input { flex: 1; min-width: 120px; background: #04070a; border: 1px solid var(--border2); color: var(--text); border-radius: 3px; padding: 7px 9px; font-family: var(--mono); font-size: 12px; }
-  .termbar input:focus { outline: none; border-color: var(--accent); }
+  .termwrap { background: #04070a; border: 1px solid var(--border2); border-radius: 3px; padding: 6px 4px 6px 8px; margin-top: 6px; }
+  #xtermBox { height: 400px; }
+  .termstatus { margin-top: 5px; }
+  .xterm .xterm-viewport { background: #04070a; }
   dialog .dbody { padding: 10px 18px 18px; max-height: 78vh; overflow-y: auto; }
   .pchart { background: #05080b; border: 1px solid var(--border2); border-radius: 4px; padding: 8px; margin-top: 6px; }
   .pchart svg { display: block; width: 100%; height: auto; }
@@ -867,6 +863,8 @@
 
 <div id="toast"></div>
 
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -909,6 +907,7 @@ function showLogin(err) {
   if (fleetES) { fleetES.close(); fleetES = null; }
   stopMapStream();
   stopLiveStream();
+  stopConsole();
   me = null;
   $("app").classList.add("hidden");
   $("login").classList.remove("hidden");
@@ -946,6 +945,7 @@ function statusCell(r) {
 /* ---------------- tabs ---------------- */
 function showTab(name) {
   stopLiveStream(); // leaving the device page (if we were on it) drops its live stream
+  stopConsole(); //  …and its SSH console session
   for (const s of document.querySelectorAll("section[id^=tab-]")) s.classList.add("hidden");
   $("tab-" + name).classList.remove("hidden");
   for (const b of document.querySelectorAll("nav.tabs button")) b.classList.toggle("active", b.dataset.tab === name);
@@ -1995,116 +1995,90 @@ async function refreshManage(ref) {
   api("/api/customers").then((cs) => { const dl = $("custList"); if (dl) dl.innerHTML = cs.map((c) => `<option value="${esc(c.name)}"></option>`).join(""); }).catch(() => {});
 }
 
-/* ---------------- device console (RouterOS CLI over SSH) ---------------- */
-// Feels like the real MikroTik CLI: bare menu words navigate (`ip` then
-// `service` then `print`), `..` goes up, `/` returns to the root, and lines
-// starting with "/" run absolute. Under the hood each executed line is still
-// one stateless SSH exec — we resolve the current menu path client-side and
-// send the full command ("/ip service print").
-let consoleState = { ref: null, history: [], hIndex: 0, path: [], name: "" };
-// Words that make a line an ACTION (execute + show output) rather than menu
-// navigation, when it's otherwise all bare words.
-const ROS_VERBS = new Set([
-  "print", "export", "add", "set", "remove", "edit", "enable", "disable", "get",
-  "comment", "move", "monitor", "ping", "reboot", "shutdown", "reset", "unset",
-  "find", "install", "uninstall", "check", "update", "upgrade", "download",
-  "fetch", "backup", "load", "save", "import", "torch", "traceroute", "scan",
-  "renew", "release", "flush", "info", "undo", "redo", "beep", "run", "start", "stop",
-]);
+/* ---------------- device console (real RouterOS CLI over an SSH PTY) ---------------- */
+// A live shell session on the router, streamed over SSE and rendered with
+// xterm.js — the actual MikroTik console, so Tab completion, "?" help,
+// colours and menus all behave exactly like ssh'ing in.
+let termState = { term: null, fit: null, es: null, sid: null, ref: null, seq: Promise.resolve(), onResize: null };
+function stopConsole() {
+  if (termState.es) termState.es.close();
+  if (termState.sid) api("/api/console/" + encodeURIComponent(termState.sid), { method: "DELETE" }).catch(() => {});
+  if (termState.term) termState.term.dispose();
+  if (termState.onResize) window.removeEventListener("resize", termState.onResize);
+  termState = { term: null, fit: null, es: null, sid: null, ref: null, seq: Promise.resolve(), onResize: null };
+}
 function renderConsole(r) {
   const el = $("pConsole");
   if (!el) return;
+  stopConsole();
   const online = isAdmin() && r.tunnelIp && r.state !== "staged" && r.state !== "revoked";
   if (!online) { el.innerHTML = ""; return; }
-  const name = r.identity || r.serialNumber;
-  consoleState = { ref: r.id, history: [], hIndex: 0, path: [], name };
   el.innerHTML = `<details class="collapse" open>
-    <summary>Console <span class="chips">— RouterOS CLI over SSH</span></summary>
-    <div class="term" id="termOut"><div class="tline dim">Connected to ${esc(name)} over the tunnel. Works like the MikroTik CLI: type <span class="mono">ip service</span> to enter a menu, then <span class="mono">print</span>; <span class="mono">..</span> goes up, <span class="mono">/</span> back to root, <span class="mono">/ip address print</span> runs absolute. ↑/↓ recall history; "clear" wipes the screen.</div></div>
-    <div class="termbar">
-      <span class="tprompt" id="termPrompt"></span>
-      <input id="termIn" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="/system resource print">
-      <button class="primary" id="termRun">Run</button>
-    </div>
+    <summary>Console <span class="chips">— live RouterOS CLI (real shell: Tab completes, ? shows help)</span></summary>
+    <div class="termwrap"><div id="xtermBox"></div></div>
+    <div class="termstatus chips" id="termStatus">connecting to ${esc(r.identity || r.serialNumber)} over the tunnel…</div>
   </details>`;
-  updateTermPrompt();
-  $("termIn").addEventListener("keydown", onConsoleKey);
-  $("termRun").addEventListener("click", () => runConsoleCmd());
+  connectConsole(r).catch((e) => {
+    const st = $("termStatus");
+    if (st) st.innerHTML = `${esc(e.message)} — <button class="linkish" onclick="retryConsole()">reconnect</button>`;
+  });
 }
-function termPath() { return consoleState.path.length ? "/" + consoleState.path.join(" ") : "/"; }
-function updateTermPrompt() {
-  const el = $("termPrompt");
-  if (el) el.textContent = `[${consoleState.name}] ${termPath()} >`;
-}
-function termAppend(text, cls) {
-  const out = $("termOut");
-  if (!out) return;
-  const div = document.createElement("div");
-  div.className = "tline" + (cls ? " " + cls : "");
-  div.textContent = text;
-  out.appendChild(div);
-  out.scrollTop = out.scrollHeight;
-}
-function onConsoleKey(e) {
-  if (e.key === "Enter") { e.preventDefault(); runConsoleCmd(); return; }
-  if (e.key === "ArrowUp") { e.preventDefault(); recallHistory(-1); return; }
-  if (e.key === "ArrowDown") { e.preventDefault(); recallHistory(1); return; }
-}
-function recallHistory(dir) {
-  const h = consoleState.history;
-  if (!h.length) return;
-  consoleState.hIndex = Math.max(0, Math.min(h.length, consoleState.hIndex + dir));
-  $("termIn").value = h[consoleState.hIndex] || "";
-}
-async function runConsoleCmd() {
-  const input = $("termIn");
-  if (!input) return;
-  const cmd = (input.value || "").trim();
-  if (!cmd) return;
-  input.value = "";
-  consoleState.history.push(cmd);
-  consoleState.hIndex = consoleState.history.length;
-  if (cmd === "clear" || cmd === "/clear") { $("termOut").innerHTML = ""; return; }
-  termAppend(termPath() + " > " + cmd, "cmd");
-
-  // ---- local navigation (no round trip needed)
-  if (cmd === "/") { consoleState.path = []; updateTermPrompt(); return; }
-  let tokens = cmd.split(/\s+/);
-  if (tokens.every((t) => t === "..")) {
-    consoleState.path = consoleState.path.slice(0, Math.max(0, consoleState.path.length - tokens.length));
-    updateTermPrompt();
-    return;
-  }
-  // Resolve against the current menu: absolute if the line starts with "/".
-  const absolute = cmd.startsWith("/");
-  if (absolute) {
-    tokens[0] = tokens[0].slice(1);
-    if (!tokens[0]) tokens = tokens.slice(1);
-  }
-  const resolved = absolute ? tokens : [...consoleState.path, ...tokens];
-  const command = "/" + resolved.join(" ");
-  // Pure menu words with no action verb = navigation, like the real CLI. We
-  // still round-trip it so a typo ("servicess") errors instead of navigating.
-  const pureWords = tokens.length > 0 && tokens.every((t) => /^[a-z][a-z0-9-]*$/i.test(t));
-  const isNav = pureWords && !ROS_VERBS.has(tokens[tokens.length - 1].toLowerCase());
-
-  input.disabled = true;
-  try {
-    const res = await api("/api/routers/" + encodeURIComponent(consoleState.ref) + "/exec", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ command }),
-    });
-    const out = (res.output || "").replace(/\s+$/, "");
-    if (isNav && res.ok && !/bad command name|syntax error|expected/i.test(out)) {
-      consoleState.path = resolved;
-      updateTermPrompt();
-      if (out) termAppend(out, "");
-    } else {
-      termAppend(out || "(no output)", res.ok && !/bad command name|syntax error|failure:/i.test(out) ? "" : "err");
+function retryConsole() { if (profileState.r) renderConsole(profileState.r); }
+async function connectConsole(r) {
+  const box = $("xtermBox");
+  if (!box) return;
+  const term = new Terminal({
+    fontSize: 12.5,
+    fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace',
+    cursorBlink: true,
+    scrollback: 5000,
+    theme: { background: "#04070a", foreground: "#d7e2ec", cursor: "#22d3ee", selectionBackground: "#1c3a4a" },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(box);
+  fit.fit();
+  const { sid } = await api("/api/routers/" + encodeURIComponent(r.id) + "/console", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cols: term.cols, rows: term.rows }),
+  });
+  if (!$("xtermBox")) { api("/api/console/" + encodeURIComponent(sid), { method: "DELETE" }).catch(() => {}); term.dispose(); return; }
+  termState = { term, fit, sid, ref: r.id, es: null, seq: Promise.resolve(), onResize: null };
+  // Keystrokes ride sequential POSTs so rapid typing can't reorder.
+  term.onData((d) => {
+    termState.seq = termState.seq
+      .then(() => api("/api/console/" + encodeURIComponent(sid) + "/input", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data: d }),
+      }))
+      .catch(() => {});
+  });
+  const es = new EventSource("/api/console/" + encodeURIComponent(sid) + "/stream?token=" + encodeURIComponent(token));
+  termState.es = es;
+  let opens = 0;
+  es.onopen = () => {
+    // An SSE auto-reconnect replays the whole scrollback — reset first so it
+    // doesn't render twice.
+    if (opens++ > 0) term.reset();
+    const st = $("termStatus");
+    if (st) st.textContent = "Connected — this is the router's own CLI. Tab completes, ? lists commands.";
+  };
+  es.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.d) term.write(Uint8Array.from(atob(m.d), (c) => c.charCodeAt(0)));
+    if (m.end) {
+      es.close();
+      const st = $("termStatus");
+      if (st) st.innerHTML = `Session ended (${esc(m.end)}) — <button class="linkish" onclick="retryConsole()">reconnect</button>`;
     }
-  } catch (e) { termAppend("Error: " + e.message, "err"); }
-  finally { input.disabled = false; input.focus(); }
+  };
+  es.onerror = () => { const st = $("termStatus"); if (st) st.textContent = "reconnecting…"; };
+  const onResize = () => { try { fit.fit(); api("/api/console/" + encodeURIComponent(sid) + "/resize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cols: term.cols, rows: term.rows }) }).catch(() => {}); } catch {} };
+  termState.onResize = onResize;
+  window.addEventListener("resize", onResize);
+  term.focus();
 }
+
 
 function healthDot(state) {
   if (state === "warning") return '<span class="dot warn"></span>degraded';
