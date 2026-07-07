@@ -30,6 +30,7 @@ import { MaintenanceStore, MAINT_CATEGORIES, maintCategory, type MaintCategory }
 import { OutageStore } from "./outages.js";
 import { computeSla, type Span } from "./sla.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
+import { rebootRouter, type RebootFn } from "./routeros.js";
 import { defaultMonitoring, effectivePorts, type RouterRecord, type DeviceType } from "./types.js";
 
 export interface AppDeps {
@@ -63,6 +64,7 @@ export interface AppDeps {
   customers?: CustomerStore;
   sshRun?: SshRunFn;
   sftpPut?: SftpPutFn;
+  reboot?: RebootFn;
 }
 
 interface AuthedRequest extends Request {
@@ -125,6 +127,7 @@ export function buildApp(deps: AppDeps): Express {
   const topology = deps.topology ?? new TopologyStore(config.topologyPath);
   const customers = deps.customers ?? new CustomerStore(config.customersPath);
   const sshRun = deps.sshRun ?? realSshRun;
+  const reboot = deps.reboot ?? rebootRouter;
   const sftpPut = deps.sftpPut ?? realSftpPut;
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
   const fetchIfaces = deps.fetchIfaces ?? realFetchInterfaces;
@@ -1801,6 +1804,50 @@ export function buildApp(deps: AppDeps): Express {
   });
 
   // ---- bulk command runner (SSH over the tunnel)
+  // ---- single-device control (admin) -----------------------------------
+  function onlineRouter(ref: string, res: Response): RouterRecord | null {
+    const router = store.find(ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return null;
+    }
+    if (router.state === "staged" || router.state === "revoked") {
+      res.status(400).json({ error: "router is not online" });
+      return null;
+    }
+    return router;
+  }
+
+  app.post("/api/routers/:ref/reboot", requireAdmin, async (req: Request, res: Response) => {
+    const router = onlineRouter(req.params.ref, res);
+    if (!router) return;
+    try {
+      await reboot(router.tunnelIp, router.username, router.password);
+      audit.log(who(req), "reboot", router.serialNumber, router.tunnelIp);
+      events.add({ at: new Date().toISOString(), serialNumber: router.serialNumber, label: router.label || router.identity || router.serialNumber, type: "monitor-error", severity: "warning", message: `Reboot issued by ${who(req)}` });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(502).json({ error: `reboot failed: ${(err as Error).message}` });
+    }
+  });
+
+  app.post("/api/routers/:ref/exec", requireAdmin, async (req: Request, res: Response) => {
+    const router = onlineRouter(req.params.ref, res);
+    if (!router) return;
+    const command = String((req.body ?? {}).command ?? "").trim();
+    if (!command || command.length > 4000) {
+      res.status(400).json({ error: "command required" });
+      return;
+    }
+    try {
+      const out = await sshRun(router.tunnelIp, router.username, router.password, command);
+      audit.log(who(req), "exec", router.serialNumber, command);
+      res.json({ ok: out.ok, output: out.output });
+    } catch (err) {
+      res.status(502).json({ error: `command failed: ${(err as Error).message}` });
+    }
+  });
+
   app.post("/api/bulk", requireAdmin, async (req: Request, res: Response) => {
     const parsed = z
       .object({

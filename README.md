@@ -209,13 +209,20 @@ tunnel via REST: uptime, CPU, memory, interface traffic, and — for LTE/5G
 devices like the Chateau — signal metrics (RSRP/RSRQ/SINR, operator, band).
 Handy for diagnosing "internet is slow" without a truck roll.
 
-## Device profile
+## Device page
 
-The **Profile** button on each router opens a full page for that device,
-pulled live over the tunnel:
+The **Open** button on each router opens one full page for that device — the
+old details and profile modals are merged into it. The header carries the
+device controls; the body is a two-column layout with live telemetry on the
+left and everything you manage on the right.
 
-- **Header** — uptime, CPU, memory, board, ROS + firmware version (with an
-  "upgrade available" flag when the RouterBOARD reports a newer firmware).
+- **Controls** (header) — **Verify** reachability, **Live stats** stream,
+  **Back up now**, **Reboot** (admin; confirms first, then issues
+  `/system/reboot` over the tunnel and logs a device event), and
+  **Revoke / Remove**.
+- **Overview** (top tiles) — state, health, uptime, CPU, memory, board,
+  ROS + firmware version (with an "upgrade available" flag when the
+  RouterBOARD reports a newer firmware).
 - **Traffic graph** — per-interface throughput over 1h / 6h / 24h / 7d / 30d,
   drawn from a background sampler that records each online device's counters
   every few minutes. The **previous period** is overlaid faintly behind the
@@ -223,9 +230,14 @@ pulled live over the tunnel:
   change vs. the preceding window. Pick any interface; it defaults to the
   busiest (usually the uplink). The management tunnel is excluded.
 - **Health** — temperature / voltage / fan sensors where the board exposes them.
-- **DHCP leases** — the device's live lease table (address, host name, MAC,
-  server, bound/waiting status, expiry).
-- **IP addresses** — every address and the interface it sits on.
+- **Ping test & monitored hosts / DHCP leases / IP addresses** — the router's
+  live tables (see below for internal-host ping monitoring).
+- **Manage** (right column) — label, customer, SLA target and notes;
+  SSH / credential quick-copy; the monitoring toggles and interactive port map;
+  a **Run a command** box (admin) that executes an arbitrary RouterOS command
+  over SSH and shows the output inline; and the config-backup list with diff /
+  restore. Saving details or monitoring refreshes the panel in place without
+  leaving the page.
 
 Traffic history is stored in `data/metrics.jsonl` and pruned to
 `metrics.retentionDays` (default 14). Sampling cadence and retention are set
@@ -240,7 +252,7 @@ firmware update check, and reboot.
 
 ## Backup diff & restore
 
-The details view diffs any two stored config versions (colourised) and, for
+The device page diffs any two stored config versions (colourised) and, for
 admins, stages a restore: the chosen backup is uploaded to the router as
 `wg-restore.rsc` for you to review and `/import` manually — never auto-applied,
 because replaying a full export onto a live device needs human eyes. A **Back
@@ -527,6 +539,8 @@ require the admin role.
 | `GET /api/routers` | tech | Inventory with handshake ages + online flag |
 | `GET /api/routers/:ref` | tech | Full details incl. credentials (ref = id, serial or tunnel IP) |
 | `POST /api/routers/:ref/verify` | tech | Handshake + REST reachability check; marks `verified` |
+| `POST /api/routers/:ref/reboot` | admin | Reboot the device over the tunnel (`/system/reboot`); logs a device event |
+| `POST /api/routers/:ref/exec` | admin | Run one RouterOS command over SSH and return its output |
 | `GET /api/routers/:ref/live` | tech | Live stats over the tunnel (system, interfaces, LTE) |
 | `GET /api/routers/:ref/profile` | tech | Live profile: DHCP leases, IP addresses, health, firmware |
 | `GET /api/routers/:ref/traffic?hours=` | tech | Traffic history + previous-period comparison from stored metrics |

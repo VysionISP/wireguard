@@ -108,6 +108,25 @@ export async function fetchLog(
   }));
 }
 
+export type RebootFn = typeof rebootRouter;
+
+/** Reboot the router via REST (non-interactive, unlike an SSH `/system reboot`). */
+export async function rebootRouter(
+  tunnelIp: string,
+  username: string,
+  password: string,
+  timeoutMs = 8000,
+): Promise<void> {
+  const auth = Buffer.from(`${username}:${password}`).toString("base64");
+  const res = await fetch(`http://${tunnelIp}/rest/system/reboot`, {
+    method: "POST",
+    headers: { authorization: `Basic ${auth}`, "content-type": "application/json" },
+    body: "{}",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`RouterOS REST /system/reboot: ${res.status}`);
+}
+
 export interface NeighborEntry {
   /** Local interface(s) the neighbor was seen on ("bridge,ether2"). */
   interface: string;

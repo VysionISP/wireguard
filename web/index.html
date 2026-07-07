@@ -208,6 +208,14 @@
   dialog .dhead { display: flex; align-items: center; padding: 13px 18px; border-bottom: 1px solid var(--border2); background: linear-gradient(180deg, #0e151d, #0b1017); }
   dialog .dhead h3 { margin: 0; font-size: 13px; flex: 1; font-family: var(--mono); text-transform: uppercase; letter-spacing: .08em; }
   dialog.wide { max-width: 1000px; }
+  dialog.full { max-width: 1180px; width: calc(100vw - 32px); }
+  dialog.full .dbody { max-height: calc(100vh - 96px); }
+  .pctrls { display: flex; gap: 6px; flex-wrap: wrap; margin-right: 8px; }
+  .pctrls button { text-transform: none; letter-spacing: 0; font-size: 12px; }
+  .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; align-items: start; }
+  @media (max-width: 860px) { .pgrid { grid-template-columns: 1fr; } }
+  .pcol { min-width: 0; }
+  pre.exec { background: #05080b; border: 1px solid var(--border2); border-radius: 3px; padding: 8px 10px; margin: 6px 0 0; font-size: 12px; white-space: pre-wrap; max-height: 200px; overflow: auto; font-family: var(--mono); }
   dialog .dbody { padding: 10px 18px 18px; max-height: 78vh; overflow-y: auto; }
   .pchart { background: #05080b; border: 1px solid var(--border2); border-radius: 4px; padding: 8px; margin-top: 6px; }
   .pchart svg { display: block; width: 100%; height: auto; }
@@ -801,18 +809,13 @@
   </section>
 </div>
 
-<dialog id="details">
-  <div class="dhead"><h3 id="dTitle"></h3><button onclick="document.getElementById('details').close()">Close</button></div>
-  <div class="dbody" id="dBody"></div>
-</dialog>
-
 <dialog id="modal">
   <div class="dhead"><h3 id="mTitle"></h3><button onclick="document.getElementById('modal').close()">Close</button></div>
   <div class="dbody" id="mBody"></div>
 </dialog>
 
-<dialog id="profile" class="wide">
-  <div class="dhead"><h3 id="pTitle"></h3><button onclick="closeProfile()">Close</button></div>
+<dialog id="profile" class="wide full">
+  <div class="dhead"><h3 id="pTitle"></h3><span class="pctrls" id="pControls"></span><button onclick="closeProfile()">Close</button></div>
   <div class="dbody" id="pBody"></div>
 </dialog>
 
@@ -1396,8 +1399,7 @@ function render() {
       <td>${staged ? "—" : fmtAge(r.handshakeAge)}</td>
       <td>${fmtDate(r.lastSeenAt)}</td>
       <td class="actions">
-        <button data-act="details" data-ref="${esc(r.id)}">Details</button>
-        ${staged ? "" : `<button data-act="profile" data-ref="${esc(r.id)}">Profile</button>`}
+        <button data-act="profile" data-ref="${esc(r.id)}">Open</button>
         ${staged ? "" : `<button data-act="live" data-ref="${esc(r.id)}">Live</button>`}
         <button data-act="verify" data-ref="${esc(r.id)}" ${staged || r.state === "revoked" ? "disabled" : ""}>Verify</button>
         ${isAdmin() ? (r.state === "revoked"
@@ -1434,113 +1436,6 @@ function exportCsv() {
   URL.revokeObjectURL(url);
 }
 
-/* ---------------- details ---------------- */
-async function openDetails(ref) {
-  const [r, backups, devEvents] = await Promise.all([
-    api("/api/routers/" + encodeURIComponent(ref)),
-    api("/api/routers/" + encodeURIComponent(ref) + "/backups").catch(() => []),
-    api("/api/routers/" + encodeURIComponent(ref) + "/events").catch(() => []),
-  ]);
-  $("dTitle").textContent = r.serialNumber + (r.label ? " — " + r.label : " — " + r.identity);
-  const transitions = (r.transitions || []).slice(-6).reverse();
-  const mon = r.monitoring || { enabled: false, alertOnLogin: true, alertOnLinkDown: true };
-  const dtype = r.deviceType || "customer";
-  portState = { ref: null, rules: new Map() }; // reset faceplate for this device
-  const backOpts = backups.map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
-  $("dBody").innerHTML = `
-    <dl class="kv">
-      <dt>State</dt><dd><span class="pill ${esc(r.state)}">${esc(r.state)}</span></dd>
-      ${r.health ? `<dt>Health</dt><dd>${r.health === "up" ? '<span class="dot on"></span>up' : r.health === "warning" ? '<span class="dot warn"></span>degraded' : '<span class="dot off"></span>offline'}${r.lastPingOkAt ? ` <span class="chips">last reply ${esc(fmtAge((Date.now() - Date.parse(r.lastPingOkAt)) / 1000))}</span>` : ""}</dd>` : ""}
-      <dt>Board</dt><dd>${esc(r.boardName)} (ROS ${esc(r.rosVersion)})</dd>
-      <dt>Identity</dt><dd>${esc(r.identity)}</dd>
-      <dt>Mgmt IP</dt><dd class="mono">${r.tunnelIp ? esc(r.tunnelIp) : "— (not registered yet)"}</dd>
-      <dt>Handshake</dt><dd>${fmtAge(r.handshakeAge)}</dd>
-      <dt>Registered</dt><dd>${fmtDate(r.createdAt)}</dd>
-      <dt>Last seen</dt><dd>${fmtDate(r.lastSeenAt)}</dd>
-      <dt>Last backup</dt><dd>${fmtDate(r.lastBackupAt)}</dd>
-    </dl>
-    <div class="meta">
-      <label for="mLabel">Label (customer / site)</label>
-      <input id="mLabel" value="${esc(r.label || "")}" placeholder="e.g. Smith residence — Ballarat">
-      <label for="mGroup">Customer <span class="chips">(groups this device under a customer — for search, the fleet view and the network map)</span></label>
-      <input id="mGroup" list="custList" value="${esc(r.customerGroup || "")}" placeholder="pick or type a customer">
-      <datalist id="custList"></datalist>
-      <label for="mSla">SLA target <span class="chips">(uptime commitment shown in reports)</span></label>
-      <select id="mSla" style="width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:6px 10px;font:inherit;font-size:13px;margin:4px 0 10px">
-        ${[["0", "None"], ["99", "99% (standard)"], ["99.5", "99.5%"], ["99.9", "99.9% (three nines)"], ["99.95", "99.95%"], ["99.99", "99.99% (four nines)"]].map(([v, l]) => `<option value="${v}" ${String(r.slaTarget || 0) === v ? "selected" : ""}>${l}</option>`).join("")}
-      </select>
-      <label for="mNotes">Notes</label>
-      <textarea id="mNotes" placeholder="anything worth remembering about this install">${esc(r.notes || "")}</textarea>
-      <button class="primary" data-act="savemeta" data-ref="${esc(r.id)}">Save</button>
-    </div>
-    ${r.tunnelIp ? `<div class="cred">
-      <div class="row"><span>ssh</span><code class="mono">ssh ${esc(r.username)}@${esc(r.tunnelIp)}</code>
-        <button data-copy="ssh ${esc(r.username)}@${esc(r.tunnelIp)}">Copy</button></div>
-      <div class="row"><span>user</span><code class="mono">${esc(r.username)}</code>
-        <button data-copy="${esc(r.username)}">Copy</button></div>
-      <div class="row"><span>password</span><code class="mono">••••••••</code>
-        <button data-copy="${esc(r.password)}">Copy</button></div>
-      <div class="row"><span>REST</span><code class="mono">http://${esc(r.tunnelIp)}/rest/</code>
-        <button data-copy="http://${esc(r.tunnelIp)}/rest/">Copy</button></div>
-    </div>` : ""}
-    <div class="sub">Monitoring</div>
-    ${isAdmin() ? `<div class="montoggles">
-      <div class="r"><span class="chips">Device type</span>
-        <select id="monType">
-          <option value="customer" ${dtype === "customer" ? "selected" : ""}>Customer CPE</option>
-          <option value="infrastructure" ${dtype === "infrastructure" ? "selected" : ""}>Infrastructure</option>
-        </select>
-      </div>
-      <label><input type="checkbox" id="monEnabled" ${mon.enabled ? "checked" : ""}> Active monitoring (poll this device over the tunnel)</label>
-      <label><input type="checkbox" id="monLogin" ${mon.alertOnLogin ? "checked" : ""}> Alert &amp; log on router login (Winbox/SSH/WebFig/API)</label>
-      <div class="r"><span class="chips">Port monitoring — click a port to set link status, inverted link, or traffic alerts. Any configured port is watched automatically.</span></div>
-      <div id="portmap"><span class="chips">loading ports…</span></div>
-      <div class="r"><span class="chips">Watch ports</span>
-        <input id="monIfaces" placeholder="blank = no ports watched" value="${esc((mon.watchInterfaces || []).join(", "))}" style="flex:1;min-width:160px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px;font-family:var(--mono);font-size:12px">
-      </div>
-      <div><button class="primary" data-act="savemon" data-ref="${esc(r.id)}">Save monitoring</button></div>
-    </div>` : `<div class="chips">Type: <span class="dtype ${esc(dtype)}">${esc(dtype)}</span> · monitoring ${mon.enabled ? "on" : "off"} (admin can change)</div>`}
-
-    ${transitions.length ? `<div class="sub">Recent connectivity</div>
-    <div class="translist">${transitions.map((t) => `
-      <div><span class="dot ${t.online ? "on" : "off"}"></span> went ${t.online ? "online" : "offline"} — ${fmtDate(t.at)}</div>`).join("")}
-    </div>` : ""}
-    ${devEvents.length ? `<div class="sub">Device events</div>
-    <div class="translist">${devEvents.slice(0, 8).map((e) => `
-      <div><span class="evtype ${esc(e.type)}">${EVENT_ICON[e.type] || ""} ${esc(e.type)}</span> ${esc(e.message)} <span class="chips">— ${fmtDate(e.at)}</span></div>`).join("")}
-    </div>` : ""}
-    <div class="sub" style="display:flex;align-items:center;gap:10px">Config backups
-      ${r.tunnelIp ? `<button data-act="backupnow" data-ref="${esc(r.id)}" style="text-transform:none;letter-spacing:0">Back up now</button>` : ""}</div>
-    <div class="backlist" id="backlist">${backups.length ? backups.map((b, i) => `
-      <div class="brow">
-        <button data-view="${esc(b.name)}" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" data-prev="${esc(backups[i + 1]?.name || "")}" class="linkish">${esc(b.name)}</button>
-        <span class="chips">${(b.size / 1024).toFixed(1)} KB${i === 0 ? " · latest" : ""}</span>
-        <span style="flex:1"></span>
-        ${backups[i + 1] ? `<button data-diffab="${esc(backups[i + 1].name)}|${esc(b.name)}" data-ref="${esc(r.id)}" class="linkish">diff vs prev</button>` : ""}
-        <button data-dl="${esc(b.name)}" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" class="linkish">download</button>
-      </div>`).join("")
-      : '<div style="color:var(--muted)">none yet — the router pushes its config on schedule after provisioning</div>'}
-    </div>
-    ${backups.length >= 2 ? `<div class="sub">Compare any two versions</div>
-      <div class="row2">
-        <select id="diffA">${backOpts}</select>
-        <span class="chips">vs</span>
-        <select id="diffB">${backOpts}</select>
-        <button data-act="diff" data-ref="${esc(r.id)}">Compare</button>
-        ${isAdmin() ? `<button data-act="restore" data-ref="${esc(r.id)}" class="danger">Stage restore…</button>` : ""}
-      </div>` : ""}`;
-  if (backups.length >= 2) { $("diffB").selectedIndex = 1; }
-  $("details").showModal();
-  // Populate the customer suggestions.
-  api("/api/customers").then((cs) => {
-    const dl = $("custList");
-    if (dl) dl.innerHTML = cs.map((c) => `<option value="${esc(c.name)}"></option>`).join("");
-  }).catch(() => {});
-  // Auto-draw the port map for online devices (admin only section).
-  if (isAdmin() && r.tunnelIp && r.state !== "staged" && r.state !== "revoked") {
-    loadPortMap(r.id).catch(() => {});
-  }
-}
 
 /* ---------------- port map (router faceplate) ---------------- */
 // rules: Map<portName, {name, link, inverted, highBps, lowBps}>
@@ -1712,8 +1607,8 @@ async function saveMonitoring(ref) {
     body: JSON.stringify(body),
   });
   toast("Monitoring updated");
-  $("details").close();
-  await load();
+  await refreshManage(ref);
+  load();
 }
 
 async function saveMeta(ref) {
@@ -1723,8 +1618,8 @@ async function saveMeta(ref) {
     body: JSON.stringify({ label: $("mLabel").value.trim(), notes: $("mNotes").value, customerGroup: $("mGroup").value.trim(), slaTarget: Number($("mSla").value) || 0 }),
   });
   toast("Saved");
-  $("details").close();
-  await load();
+  await refreshManage(ref);
+  load();
 }
 
 async function downloadBackup(ref, serial, name) {
@@ -1848,30 +1743,187 @@ function openLive(ref) {
   liveES.onerror = () => { /* auto-reconnects; leave last frame up */ };
 }
 
-/* ---------------- device profile ---------------- */
+/* ---------------- device page (profile + manage + control) ---------------- */
 let profileState = { ref: null, hours: 24, iface: null, traffic: null };
-function closeProfile() { $("profile").close(); profileState = { ref: null, hours: 24, iface: null, traffic: null }; }
+function closeProfile() { $("profile").close(); stopLiveStream(); profileState = { ref: null, hours: 24, iface: null, traffic: null }; }
 const RANGES = [{ h: 1, l: "1h" }, { h: 6, l: "6h" }, { h: 24, l: "24h" }, { h: 168, l: "7d" }, { h: 720, l: "30d" }];
+// Back-compat: the fleet/map still call openProfile/openDetails.
+const openProfile = openDevice;
 
-async function openProfile(ref) {
+async function openDevice(ref) {
   profileState = { ref, hours: 24, iface: null, traffic: null };
-  $("pTitle").textContent = "Device profile";
-  $("pBody").innerHTML = '<p class="chips">Loading device profile over the tunnel…</p>';
+  portState = { ref: null, rules: new Map() };
+  $("pTitle").textContent = "Device";
+  $("pControls").innerHTML = "";
+  $("pBody").innerHTML = `
+    <div id="pOverview"></div>
+    <div class="pgrid">
+      <div class="pcol">
+        <div class="sub">Traffic</div><div id="pTraffic"><p class="chips">…</p></div>
+        <div id="pLive"><p class="chips">Loading live device data over the tunnel…</p></div>
+      </div>
+      <div class="pcol"><div id="pManage"></div></div>
+    </div>`;
   $("profile").showModal();
+
+  // Inventory data (always available) drives the header, controls and manage
+  // panel; the live profile (over the tunnel) fills tiles/traffic/DHCP/hosts.
+  const [r, backups, devEvents] = await Promise.all([
+    api("/api/routers/" + encodeURIComponent(ref)),
+    api("/api/routers/" + encodeURIComponent(ref) + "/backups").catch(() => []),
+    api("/api/routers/" + encodeURIComponent(ref) + "/events").catch(() => []),
+  ]);
+  if (profileState.ref !== ref) return;
+  profileState.r = r; profileState.backups = backups; profileState.events = devEvents;
+  $("pTitle").textContent = r.serialNumber + (r.label ? " — " + r.label : " — " + r.identity);
+  renderControls(r);
+  renderManage(r, backups, devEvents);
+  api("/api/customers").then((cs) => { const dl = $("custList"); if (dl) dl.innerHTML = cs.map((c) => `<option value="${esc(c.name)}"></option>`).join(""); }).catch(() => {});
+  if (isAdmin() && r.tunnelIp && r.state !== "staged" && r.state !== "revoked") loadPortMap(r.id).catch(() => {});
+
+  const online = r.tunnelIp && r.state !== "staged" && r.state !== "revoked";
+  renderOverview(r, null);
+  if (!online) { $("pTraffic").innerHTML = ""; $("pLive").innerHTML = '<p class="chips">Live data unavailable — device is not registered / online.</p>'; return; }
   let prof;
-  try {
-    prof = await api("/api/routers/" + encodeURIComponent(ref) + "/profile");
-  } catch (e) {
-    if (profileState.ref === ref) $("pBody").innerHTML = `<p class="chips">Could not reach the router: ${esc(e.message)}</p>`;
-    return;
-  }
-  if (profileState.ref !== ref) return; // another device's profile was opened
+  try { prof = await api("/api/routers/" + encodeURIComponent(ref) + "/profile"); }
+  catch (e) { if (profileState.ref === ref) { $("pTraffic").innerHTML = ""; $("pLive").innerHTML = `<p class="chips">Could not reach the router over the tunnel: ${esc(e.message)}</p>`; } return; }
+  if (profileState.ref !== ref) return;
   profileState.prof = prof;
   profileState.hosts = await api("/api/routers/" + encodeURIComponent(ref) + "/hosts").catch(() => []);
   if (profileState.ref !== ref) return;
-  $("pTitle").textContent = prof.identity + " — profile";
+  renderOverview(r, prof);
   renderProfileShell(prof);
   await loadTraffic();
+}
+
+function renderControls(r) {
+  const admin = isAdmin();
+  const online = r.tunnelIp && r.state !== "staged" && r.state !== "revoked";
+  const btns = [];
+  btns.push(`<button data-act="verify" data-ref="${esc(r.id)}" ${online ? "" : "disabled"}>Verify</button>`);
+  if (online) btns.push(`<button data-act="live" data-ref="${esc(r.id)}">Live stats</button>`);
+  if (admin && online) {
+    btns.push(`<button data-act="backupnow" data-ref="${esc(r.id)}">Back up now</button>`);
+    btns.push(`<button class="danger" data-act="reboot" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">Reboot</button>`);
+  }
+  if (admin) btns.push(r.state === "revoked"
+    ? `<button class="danger" data-act="remove" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">Remove</button>`
+    : `<button class="danger" data-act="revoke" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">Revoke</button>`);
+  $("pControls").innerHTML = btns.join("");
+}
+
+function renderOverview(r, prof) {
+  const el = $("pOverview");
+  const healthPill = r.health === "warning" ? '<span class="dot warn"></span>degraded'
+    : r.health === "offline" ? '<span class="dot off"></span>offline'
+    : r.health === "up" ? '<span class="dot on"></span>up' : "";
+  if (prof) {
+    const res = prof.resource;
+    const memPct = res.totalMemory ? ((res.totalMemory - res.freeMemory) / res.totalMemory) * 100 : 0;
+    const rb = prof.routerboard;
+    const upgrade = rb && rb.upgradeAvailable && rb.upgradeAvailable !== rb.firmware
+      ? `<span class="pill revoked" title="firmware upgrade available">upgrade → ${esc(rb.upgradeAvailable)}</span>` : "";
+    el.innerHTML = `<div class="signal">
+      ${signalTile("State", r.state)}
+      ${r.health ? `<div class="s"><div class="v" style="font-size:14px">${healthPill}</div><div class="k">Health</div></div>` : ""}
+      ${signalTile("Uptime", res.uptime)}
+      ${signalTile("CPU", res.cpoLoad != null ? res.cpoLoad + "%" : res.cpuLoad + "%", res.cpuLoad)}
+      ${signalTile("Memory", fmtBytes(res.totalMemory - res.freeMemory) + " / " + fmtBytes(res.totalMemory), memPct)}
+      ${signalTile("Board", res.boardName)}
+      ${signalTile("ROS", res.version)}
+      ${rb ? signalTile("Firmware", rb.firmware) : ""}
+    </div>${upgrade ? `<div class="chips" style="margin-top:4px">${upgrade}</div>` : ""}`;
+  } else {
+    el.innerHTML = `<div class="signal">
+      ${signalTile("State", r.state)}
+      ${r.health ? `<div class="s"><div class="v" style="font-size:14px">${healthPill}</div><div class="k">Health</div></div>` : ""}
+      ${signalTile("Board", r.boardName)}
+      ${signalTile("ROS", r.rosVersion)}
+      ${signalTile("Mgmt IP", r.tunnelIp || "—")}
+      ${signalTile("Handshake", fmtAge(r.handshakeAge))}
+    </div>`;
+  }
+}
+
+function renderManage(r, backups, devEvents) {
+  const transitions = (r.transitions || []).slice(-6).reverse();
+  const mon = r.monitoring || { enabled: false, alertOnLogin: true, alertOnLinkDown: true };
+  const dtype = r.deviceType || "customer";
+  const backOpts = backups.map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
+  $("pManage").innerHTML = `
+    <div class="meta">
+      <label for="mLabel">Label (customer / site)</label>
+      <input id="mLabel" value="${esc(r.label || "")}" placeholder="e.g. Smith residence — Ballarat">
+      <label for="mGroup">Customer</label>
+      <input id="mGroup" list="custList" value="${esc(r.customerGroup || "")}" placeholder="pick or type a customer">
+      <datalist id="custList"></datalist>
+      <label for="mSla">SLA target <span class="chips">(uptime commitment shown in reports)</span></label>
+      <select id="mSla" style="width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:6px 10px;font:inherit;font-size:13px;margin:4px 0 10px">
+        ${[["0", "None"], ["99", "99% (standard)"], ["99.5", "99.5%"], ["99.9", "99.9% (three nines)"], ["99.95", "99.95%"], ["99.99", "99.99% (four nines)"]].map(([v, l]) => `<option value="${v}" ${String(r.slaTarget || 0) === v ? "selected" : ""}>${l}</option>`).join("")}
+      </select>
+      <label for="mNotes">Notes</label>
+      <textarea id="mNotes" placeholder="anything worth remembering about this install">${esc(r.notes || "")}</textarea>
+      <button class="primary" data-act="savemeta" data-ref="${esc(r.id)}">Save details</button>
+    </div>
+    ${r.tunnelIp ? `<div class="cred">
+      <div class="row"><span>ssh</span><code class="mono">ssh ${esc(r.username)}@${esc(r.tunnelIp)}</code><button data-copy="ssh ${esc(r.username)}@${esc(r.tunnelIp)}">Copy</button></div>
+      <div class="row"><span>user</span><code class="mono">${esc(r.username)}</code><button data-copy="${esc(r.username)}">Copy</button></div>
+      <div class="row"><span>password</span><code class="mono">••••••••</code><button data-copy="${esc(r.password)}">Copy</button></div>
+      <div class="row"><span>REST</span><code class="mono">http://${esc(r.tunnelIp)}/rest/</code><button data-copy="http://${esc(r.tunnelIp)}/rest/">Copy</button></div>
+    </div>` : ""}
+    <div class="sub">Monitoring</div>
+    ${isAdmin() ? `<div class="montoggles">
+      <div class="r"><span class="chips">Device type</span>
+        <select id="monType">
+          <option value="customer" ${dtype === "customer" ? "selected" : ""}>Customer CPE</option>
+          <option value="infrastructure" ${dtype === "infrastructure" ? "selected" : ""}>Infrastructure</option>
+        </select></div>
+      <label><input type="checkbox" id="monEnabled" ${mon.enabled ? "checked" : ""}> Active monitoring (poll this device over the tunnel)</label>
+      <label><input type="checkbox" id="monLogin" ${mon.alertOnLogin ? "checked" : ""}> Alert &amp; log on router login</label>
+      <div class="r"><span class="chips">Port monitoring — click a port to set link status, inverted link, or traffic alerts.</span></div>
+      <div id="portmap"><span class="chips">loading ports…</span></div>
+      <input id="monIfaces" type="hidden" value="${esc((mon.watchInterfaces || []).join(", "))}">
+      <div><button class="primary" data-act="savemon" data-ref="${esc(r.id)}">Save monitoring</button></div>
+    </div>` : `<div class="chips">Type: <span class="dtype ${esc(dtype)}">${esc(dtype)}</span> · monitoring ${mon.enabled ? "on" : "off"} (admin can change)</div>`}
+    ${isAdmin() && r.tunnelIp && r.state !== "staged" && r.state !== "revoked" ? `<div class="sub">Run a command</div>
+      <div class="row2"><input id="execCmd" placeholder="/system/resource/print" style="flex:1;min-width:200px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:6px 9px;font-family:var(--mono);font-size:12px">
+        <button data-act="exec" data-ref="${esc(r.id)}">Run</button></div>
+      <pre class="exec hidden" id="execOut"></pre>` : ""}
+    <div class="sub" style="display:flex;align-items:center;gap:10px">Config backups</div>
+    <div class="backlist" id="backlist">${backups.length ? backups.map((b, i) => `
+      <div class="brow">
+        <button data-view="${esc(b.name)}" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" data-prev="${esc(backups[i + 1]?.name || "")}" class="linkish">${esc(b.name)}</button>
+        <span class="chips">${(b.size / 1024).toFixed(1)} KB${i === 0 ? " · latest" : ""}</span><span style="flex:1"></span>
+        ${backups[i + 1] ? `<button data-diffab="${esc(backups[i + 1].name)}|${esc(b.name)}" data-ref="${esc(r.id)}" class="linkish">diff vs prev</button>` : ""}
+        <button data-dl="${esc(b.name)}" data-ref="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" class="linkish">download</button>
+      </div>`).join("") : '<div style="color:var(--muted)">none yet — the router pushes its config on schedule</div>'}</div>
+    ${backups.length >= 2 ? `<div class="row2" style="margin-top:6px">
+      <select id="diffA">${backOpts}</select><span class="chips">vs</span><select id="diffB">${backOpts}</select>
+      <button data-act="diff" data-ref="${esc(r.id)}">Compare</button>
+      ${isAdmin() ? `<button data-act="restore" data-ref="${esc(r.id)}" class="danger">Stage restore…</button>` : ""}</div>` : ""}
+    ${transitions.length ? `<div class="sub">Recent connectivity</div><div class="translist">${transitions.map((t) => `
+      <div><span class="dot ${t.online ? "on" : "off"}"></span> went ${t.online ? "online" : "offline"} — ${fmtDate(t.at)}</div>`).join("")}</div>` : ""}
+    ${devEvents.length ? `<div class="sub">Device events</div><div class="translist">${devEvents.slice(0, 8).map((e) => `
+      <div><span class="evtype ${esc(e.type)}">${EVENT_ICON[e.type] || ""} ${esc(e.type)}</span> ${esc(e.message)} <span class="chips">— ${fmtDate(e.at)}</span></div>`).join("")}</div>` : ""}`;
+  if (backups.length >= 2) $("diffB").selectedIndex = 1;
+}
+
+// Refresh the inventory-driven panels after an edit/action without reloading
+// the whole page (keeps the traffic graph and live sections intact).
+async function refreshManage(ref) {
+  if (profileState.ref !== ref) return;
+  const [r, backups, devEvents] = await Promise.all([
+    api("/api/routers/" + encodeURIComponent(ref)),
+    api("/api/routers/" + encodeURIComponent(ref) + "/backups").catch(() => []),
+    api("/api/routers/" + encodeURIComponent(ref) + "/events").catch(() => []),
+  ]);
+  if (profileState.ref !== ref) return;
+  profileState.r = r;
+  renderControls(r);
+  renderOverview(r, profileState.prof || null);
+  renderManage(r, backups, devEvents);
+  if (isAdmin() && r.tunnelIp && r.state !== "staged" && r.state !== "revoked") loadPortMap(r.id).catch(() => {});
+  api("/api/customers").then((cs) => { const dl = $("custList"); if (dl) dl.innerHTML = cs.map((c) => `<option value="${esc(c.name)}"></option>`).join(""); }).catch(() => {});
 }
 
 function healthDot(state) {
@@ -1924,30 +1976,13 @@ function monitorStatic() {
 }
 
 function renderProfileShell(prof) {
-  const r = prof.resource;
-  const memPct = r.totalMemory ? ((r.totalMemory - r.freeMemory) / r.totalMemory) * 100 : 0;
-  const rb = prof.routerboard;
-  const upgrade = rb && rb.upgradeAvailable && rb.upgradeAvailable !== rb.firmware
-    ? ` <span class="pill revoked" title="firmware upgrade available">upgrade → ${esc(rb.upgradeAvailable)}</span>` : "";
+  if (!$("pLive")) return;
   const health = (prof.health || []).filter((h) => h.value !== "" && h.value != null);
   const leases = prof.dhcpLeases || [];
   const bound = leases.filter((l) => (l.status || "").toLowerCase() === "bound" || l.status === "").length;
   const monHosts = profileState.hosts || [];
   const monByAddr = new Map(monHosts.map((h) => [h.address, h]));
-  $("pBody").innerHTML = `
-    <div class="signal">
-      ${signalTile("Uptime", r.uptime)}
-      ${signalTile("CPU", r.cpuLoad + "%", r.cpuLoad)}
-      ${signalTile("Memory", fmtBytes(r.totalMemory - r.freeMemory) + " / " + fmtBytes(r.totalMemory), memPct)}
-      ${signalTile("Board", r.boardName)}
-      ${signalTile("ROS", r.version)}
-      ${rb ? signalTile("Firmware", rb.firmware) : ""}
-    </div>
-    ${upgrade ? `<div class="chips" style="margin-top:4px">${upgrade}</div>` : ""}
-
-    <div class="sub">Traffic</div>
-    <div id="pTraffic"><p class="chips">Loading traffic history…</p></div>
-
+  $("pLive").innerHTML = `
     ${health.length ? `<div class="sub">Health</div><div class="signal">
       ${health.map((h) => signalTile(h.name, h.value)).join("")}</div>` : ""}
 
@@ -2503,7 +2538,6 @@ document.addEventListener("click", async (ev) => {
   const { act, ref } = d;
   if (!act) return;
   try {
-    if (act === "details") await openDetails(ref);
     if (act === "profile") await openProfile(ref);
     if (act === "savemeta") await saveMeta(ref);
     if (act === "savemon") await saveMonitoring(ref);
@@ -2515,8 +2549,32 @@ document.addEventListener("click", async (ev) => {
       try {
         const r = await api("/api/routers/" + encodeURIComponent(ref) + "/backup-now", { method: "POST" });
         toast(r.stored ? "New backup saved" : "Backed up — config unchanged since last version");
-        await openDetails(ref);
+        await refreshManage(ref);
       } finally { btn.disabled = false; btn.textContent = "Back up now"; }
+    }
+    if (act === "reboot") {
+      if (!confirm(`Reboot ${d.serial}? It will drop off the tunnel for ~30-60s while it restarts.`)) return;
+      btn.disabled = true; btn.textContent = "Rebooting…";
+      try {
+        await api("/api/routers/" + encodeURIComponent(ref) + "/reboot", { method: "POST" });
+        toast("Reboot command sent to " + d.serial);
+      } finally { btn.disabled = false; btn.textContent = "Reboot"; }
+    }
+    if (act === "exec") {
+      const cmd = ($("execCmd").value || "").trim();
+      if (!cmd) return toast("Enter a command path, e.g. /system/resource/print");
+      const out = $("execOut");
+      out.classList.remove("hidden");
+      out.textContent = "Running " + cmd + " …";
+      btn.disabled = true;
+      try {
+        const r = await api("/api/routers/" + encodeURIComponent(ref) + "/exec", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ command: cmd }),
+        });
+        out.textContent = r.output && r.output.trim() ? r.output : "(no output)";
+      } catch (e) { out.textContent = "Error: " + e.message; }
+      finally { btn.disabled = false; }
     }
     if (act === "verify") {
       btn.disabled = true; btn.textContent = "…";
