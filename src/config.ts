@@ -163,6 +163,24 @@ const configSchema = z.object({
   /** Append-only metrics samples (JSONL). */
   metricsPath: z.string().default("data/metrics.jsonl"),
   /**
+   * Upstream latency monitoring: each monitored router pings anchor targets
+   * (8.8.8.8 / 1.1.1.1 by default, per-device configurable) on an interval;
+   * results feed the latency graph and loss/latency alerts.
+   */
+  upstreamPing: z
+    .object({
+      enabled: z.boolean().default(true),
+      /** How often each router pings its targets. */
+      intervalSeconds: z.number().int().min(15).default(60),
+      /** Echo requests per target per tick. */
+      pingCount: z.number().int().min(1).max(10).default(3),
+      /** How long samples are kept before pruning. */
+      retentionDays: z.number().int().min(1).default(14),
+    })
+    .default({}),
+  /** Append-only upstream-ping samples (JSONL). */
+  pingMetricsPath: z.string().default("data/pingmetrics.jsonl"),
+  /**
    * Ping-monitoring of internal LAN devices (DHCP clients, cameras, APs). The
    * router pings them on our behalf, since they aren't routable from here.
    */

@@ -15,6 +15,7 @@ export type MaintCategory = (typeof MAINT_CATEGORIES)[number];
 /** Map an issue/event type to its maintenance category. */
 export function maintCategory(type: string): MaintCategory {
   if (type === "link-down" || type === "link-up" || type === "traffic-high" || type === "traffic-low") return "link";
+  if (type.startsWith("upstream-")) return "link";
   if (type === "host-down" || type === "host-up") return "host";
   if (type === "login") return "login";
   return "offline"; // offline / online / monitor-error

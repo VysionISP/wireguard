@@ -78,6 +78,32 @@ export interface PortRule {
   lowBps?: number;
 }
 
+/**
+ * Upstream ping monitoring: the router itself pings well-known anchors
+ * (8.8.8.8 / 1.1.1.1 by default, plus any extras) on an interval so we can
+ * graph the latency its customers actually experience and flag upstream
+ * loss/latency even while the management tunnel is healthy.
+ */
+export interface UpstreamPing {
+  enabled: boolean;
+  /** Full target list. Empty/absent = the defaults. */
+  targets: string[];
+  /** Alert when average RTT to a target exceeds this many ms (0 = off). */
+  alertAboveMs?: number;
+}
+
+export const DEFAULT_UPSTREAM_TARGETS = ["8.8.8.8", "1.1.1.1"];
+export const MAX_UPSTREAM_TARGETS = 8;
+
+/** The effective upstream targets for a device ([] = don't ping). */
+export function upstreamTargets(mon: DeviceMonitoring | undefined): string[] {
+  if (!mon?.enabled) return [];
+  const up = mon.upstreamPing;
+  if (up && up.enabled === false) return [];
+  const list = up?.targets?.length ? up.targets : DEFAULT_UPSTREAM_TARGETS;
+  return [...new Set(list)].slice(0, MAX_UPSTREAM_TARGETS);
+}
+
 export interface DeviceMonitoring {
   /** Master switch: poll this device over the tunnel for logins / link state. */
   enabled: boolean;
@@ -89,6 +115,8 @@ export interface DeviceMonitoring {
   watchInterfaces: string[];
   /** Per-port rules: link (optionally inverted) + traffic thresholds. */
   ports?: PortRule[];
+  /** Upstream latency monitoring. Absent = on with default targets. */
+  upstreamPing?: UpstreamPing;
 }
 
 /**

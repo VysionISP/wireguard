@@ -25,13 +25,14 @@ import { CustomerStore } from "./customers.js";
 import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, fetchPing, fetchNeighbors, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn, type FetchPingFn, type FetchNeighborsFn, type NeighborEntry } from "./routeros.js";
 import { discoverLinks } from "./discovery.js";
 import { MetricsStore, computeTraffic } from "./metrics.js";
+import { PingMetricsStore } from "./pingmetrics.js";
 import { HostStore } from "./hosts.js";
 import { MaintenanceStore, MAINT_CATEGORIES, maintCategory, type MaintCategory } from "./maintenance.js";
 import { OutageStore } from "./outages.js";
 import { computeSla, type Span } from "./sla.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn } from "./ssh.js";
 import { rebootRouter, type RebootFn } from "./routeros.js";
-import { defaultMonitoring, effectivePorts, type RouterRecord, type DeviceType } from "./types.js";
+import { defaultMonitoring, effectivePorts, upstreamTargets, DEFAULT_UPSTREAM_TARGETS, MAX_UPSTREAM_TARGETS, type RouterRecord, type DeviceType } from "./types.js";
 
 export interface AppDeps {
   config: Config;
@@ -45,6 +46,7 @@ export interface AppDeps {
   fetchPing?: FetchPingFn;
   fetchNeighbors?: FetchNeighborsFn;
   metrics?: MetricsStore;
+  pings?: PingMetricsStore;
   hosts?: HostStore;
   maintenance?: MaintenanceStore;
   outages?: OutageStore;
@@ -136,6 +138,8 @@ export function buildApp(deps: AppDeps): Express {
   const fetchNeighborsFn = deps.fetchNeighbors ?? fetchNeighbors;
   const metrics =
     deps.metrics ?? new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
+  const pings =
+    deps.pings ?? new PingMetricsStore(config.pingMetricsPath, config.upstreamPing.retentionDays * 24 * 3600_000);
   const hosts = deps.hosts ?? new HostStore(config.hostsPath);
   const maintenance = deps.maintenance ?? new MaintenanceStore(config.maintenancePath);
   const outages = deps.outages ?? new OutageStore(config.outagesPath);
@@ -983,6 +987,13 @@ export function buildApp(deps: AppDeps): Express {
           )
           .max(64)
           .optional(),
+        upstreamPing: z
+          .object({
+            enabled: z.boolean(),
+            targets: z.array(z.string().regex(/^\d{1,3}(\.\d{1,3}){3}$/)).max(MAX_UPSTREAM_TARGETS),
+            alertAboveMs: z.number().min(0).max(60000).optional(),
+          })
+          .optional(),
       })
       .safeParse(req.body);
     if (!parsed.success) {
@@ -1003,6 +1014,7 @@ export function buildApp(deps: AppDeps): Express {
       mon.watchInterfaces = p.watchInterfaces;
       mon.ports = p.watchInterfaces.map((name) => ({ name, link: true, inverted: false }));
     }
+    if (p.upstreamPing !== undefined) mon.upstreamPing = p.upstreamPing;
     // Changing rules invalidates the detection baseline so we re-learn cleanly.
     router.monitoring = mon;
     router.monState = { ifaceRunning: {}, seenLogins: [], initialised: false };
@@ -1046,6 +1058,43 @@ export function buildApp(deps: AppDeps): Express {
     } catch (err) {
       res.status(502).json({ error: `router unreachable: ${(err as Error).message}` });
     }
+  });
+
+  // ---- upstream ping latency history (router -> 8.8.8.8 / 1.1.1.1 / custom)
+  app.get("/api/routers/:ref/pings", requireTech, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const hours = Math.min(720, Math.max(1, Number(req.query.hours) || 24));
+    const samples = pings.samples(router.serialNumber, hours);
+    // Series per target, in the order configured (targets seen only in old
+    // samples still chart, appended after the configured ones).
+    const configured = upstreamTargets(router.monitoring);
+    const targets = [...configured];
+    const series: Record<string, Array<{ t: number; rtt: number | null; loss: number }>> = {};
+    for (const s of samples) {
+      for (const [addr, v] of Object.entries(s.targets)) {
+        if (!series[addr]) {
+          series[addr] = [];
+          if (!targets.includes(addr)) targets.push(addr);
+        }
+        series[addr].push({ t: s.at, rtt: v.rtt, loss: v.loss });
+      }
+    }
+    for (const t of targets) if (!series[t]) series[t] = [];
+    const up = router.monitoring?.upstreamPing;
+    res.json({
+      hours,
+      intervalSeconds: config.upstreamPing.intervalSeconds,
+      enabled: configured.length > 0,
+      configuredTargets: configured,
+      defaultTargets: DEFAULT_UPSTREAM_TARGETS,
+      alertAboveMs: up?.alertAboveMs ?? 0,
+      targets,
+      series,
+    });
   });
 
   // ---- historical traffic + previous-period comparison (from stored metrics)

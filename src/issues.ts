@@ -9,6 +9,8 @@ export type IssueType =
   | "traffic-high"
   | "traffic-low"
   | "host-down"
+  | "upstream-down"
+  | "upstream-latency"
   | "login"
   | "monitor-error";
 

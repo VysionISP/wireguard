@@ -13,7 +13,10 @@ type AlertEvent =
   | "traffic-high"
   | "traffic-low"
   | "host-down"
-  | "host-up";
+  | "host-up"
+  | "upstream-down"
+  | "upstream-up"
+  | "upstream-latency";
 
 export type SendFn = (text: string, event: AlertEvent, router: RouterRecord) => Promise<void>;
 
@@ -22,6 +25,9 @@ export function routeKey(event: AlertEvent): RouteKey {
   // Link flaps and traffic-threshold alerts are both port-health signals and
   // share the "link" subscription category.
   if (event === "link-down" || event === "link-up" || event === "traffic-high" || event === "traffic-low") return "link";
+  // Upstream loss/latency is a connectivity-quality signal; ride the link category.
+  if (event === "upstream-down" || event === "upstream-latency") return "link";
+  if (event === "upstream-up") return "link";
   // Monitored internal hosts going down/up ride the offline/online categories.
   if (event === "host-down") return "offline";
   if (event === "host-up") return "online";

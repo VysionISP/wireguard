@@ -335,6 +335,7 @@
   .evtype { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
   .evtype.login { color: var(--accent); } .evtype.offline, .evtype.link-down { color: var(--red); }
   .evtype.online, .evtype.link-up { color: var(--green); } .evtype.backup { color: var(--muted); }
+  .evtype.upstream-down, .evtype.upstream-latency { color: var(--amber); } .evtype.upstream-up { color: var(--green); }
 
   /* ---- device type + monitoring block ---- */
   .dtype { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; padding: 1px 7px; border-radius: 3px; border: 1px solid var(--border2); color: var(--muted); }
@@ -1070,7 +1071,7 @@ function applyRoute() {
 }
 
 /* ---------------- status board ---------------- */
-const EVENT_ICON = { login: "🔑", logout: "🚪", "link-down": "🔌", "link-up": "🔗", offline: "⛔", online: "✅", backup: "💾", "monitor-error": "⚠" };
+const EVENT_ICON = { login: "🔑", logout: "🚪", "link-down": "🔌", "link-up": "🔗", offline: "⛔", online: "✅", backup: "💾", "monitor-error": "⚠", "upstream-down": "🌐", "upstream-up": "🌐", "upstream-latency": "🐢" };
 function eventRowsHtml(list) {
   return list.map((e) => `<tr>
     <td class="mono">${fmtDate(e.at)}</td>
@@ -1629,6 +1630,16 @@ async function saveMonitoring(ref) {
     enabled: $("monEnabled").checked,
     alertOnLogin: $("monLogin").checked,
   };
+  if ($("upEnabled")) {
+    const targets = $("upTargets").value.split(",").map((s) => s.trim()).filter(Boolean);
+    const bad = targets.filter((t) => !IPV4.test(t));
+    if (bad.length) return toast("Upstream ping targets must be IPv4 addresses: " + bad.join(", "));
+    body.upstreamPing = {
+      enabled: $("upEnabled").checked,
+      targets,
+      alertAboveMs: Math.max(0, Number($("upAlertMs").value) || 0),
+    };
+  }
   if (ports) {
     body.ports = ports;
     // Legacy flag kept in sync: on when any port is configured.
@@ -1644,6 +1655,7 @@ async function saveMonitoring(ref) {
   });
   toast("Monitoring updated");
   await refreshManage(ref);
+  loadPings(); // target list may have changed
   load();
 }
 
@@ -1809,6 +1821,8 @@ async function openDevice(ref) {
     <div class="pgrid">
       <div class="pcol">
         <div class="sub">Traffic</div><div id="pTraffic"><p class="chips">…</p></div>
+        <div class="sub">Upstream ping <span class="chips">(latency from this router to its anchors)</span></div>
+        <div id="pPing"><p class="chips">…</p></div>
         <div id="pLive"><p class="chips">Loading live device data over the tunnel…</p></div>
       </div>
       <div class="pcol"><div id="pManage"></div></div>
@@ -1828,6 +1842,8 @@ async function openDevice(ref) {
   renderControls(r);
   renderManage(r, backups, devEvents);
   renderConsole(r); // once — its scrollback survives refreshManage (which only rewrites #pManage)
+  pingState = { hours: 24, data: null };
+  loadPings(); // stored history — works even when the tunnel is down right now
   api("/api/customers").then((cs) => { const dl = $("custList"); if (dl) dl.innerHTML = cs.map((c) => `<option value="${esc(c.name)}"></option>`).join(""); }).catch(() => {});
   if (isAdmin() && r.tunnelIp && r.state !== "staged" && r.state !== "revoked") loadPortMap(r.id).catch(() => {});
 
@@ -1933,6 +1949,12 @@ function renderManage(r, backups, devEvents) {
       <label><input type="checkbox" id="monLogin" ${mon.alertOnLogin ? "checked" : ""}> Alert &amp; log on router login</label>
       <div class="r"><span class="chips">Port monitoring — click a port in the diagram at the top of the page to set link status, inverted link, or traffic alerts.</span></div>
       <input id="monIfaces" type="hidden" value="${esc((mon.watchInterfaces || []).join(", "))}">
+      <label style="margin-top:4px"><input type="checkbox" id="upEnabled" ${(mon.upstreamPing ? mon.upstreamPing.enabled : true) ? "checked" : ""}> Upstream ping — the router pings anchor IPs so we graph its real latency and flag loss</label>
+      <div class="r"><span class="chips">Targets</span>
+        <input id="upTargets" value="${esc((mon.upstreamPing && mon.upstreamPing.targets && mon.upstreamPing.targets.length ? mon.upstreamPing.targets : ["8.8.8.8", "1.1.1.1"]).join(", "))}" placeholder="8.8.8.8, 1.1.1.1" style="flex:1;min-width:160px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px;font-family:var(--mono);font-size:12px">
+        <span class="chips">alert above</span>
+        <input id="upAlertMs" type="number" min="0" step="10" value="${mon.upstreamPing && mon.upstreamPing.alertAboveMs ? mon.upstreamPing.alertAboveMs : ""}" placeholder="0 = off" style="width:84px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:4px 8px;font-family:var(--mono);font-size:12px">
+        <span class="chips">ms</span></div>
       <div><button class="primary" data-act="savemon" data-ref="${esc(r.id)}">Save monitoring</button></div>
       </div>
     </details>` : `<div class="sub">Monitoring</div><div class="chips">Type: <span class="dtype ${esc(dtype)}">${esc(dtype)}</span> · monitoring ${mon.enabled ? "on" : "off"} (admin can change)</div>`}
@@ -1974,27 +1996,45 @@ async function refreshManage(ref) {
 }
 
 /* ---------------- device console (RouterOS CLI over SSH) ---------------- */
-// Each entered line is an independent SSH exec (the runner is stateless), so
-// there's no persistent shell context — fine for RouterOS's path-style commands.
-let consoleState = { ref: null, history: [], hIndex: 0 };
+// Feels like the real MikroTik CLI: bare menu words navigate (`ip` then
+// `service` then `print`), `..` goes up, `/` returns to the root, and lines
+// starting with "/" run absolute. Under the hood each executed line is still
+// one stateless SSH exec — we resolve the current menu path client-side and
+// send the full command ("/ip service print").
+let consoleState = { ref: null, history: [], hIndex: 0, path: [], name: "" };
+// Words that make a line an ACTION (execute + show output) rather than menu
+// navigation, when it's otherwise all bare words.
+const ROS_VERBS = new Set([
+  "print", "export", "add", "set", "remove", "edit", "enable", "disable", "get",
+  "comment", "move", "monitor", "ping", "reboot", "shutdown", "reset", "unset",
+  "find", "install", "uninstall", "check", "update", "upgrade", "download",
+  "fetch", "backup", "load", "save", "import", "torch", "traceroute", "scan",
+  "renew", "release", "flush", "info", "undo", "redo", "beep", "run", "start", "stop",
+]);
 function renderConsole(r) {
   const el = $("pConsole");
   if (!el) return;
   const online = isAdmin() && r.tunnelIp && r.state !== "staged" && r.state !== "revoked";
   if (!online) { el.innerHTML = ""; return; }
-  consoleState = { ref: r.id, history: [], hIndex: 0 };
   const name = r.identity || r.serialNumber;
+  consoleState = { ref: r.id, history: [], hIndex: 0, path: [], name };
   el.innerHTML = `<details class="collapse" open>
-    <summary>Console <span class="chips">— RouterOS CLI over SSH (each line runs independently)</span></summary>
-    <div class="term" id="termOut"><div class="tline dim">Connected to ${esc(name)} over the tunnel. Type a RouterOS command — e.g. <span class="mono">/system resource print</span>. "clear" wipes the screen; ↑/↓ recall history.</div></div>
+    <summary>Console <span class="chips">— RouterOS CLI over SSH</span></summary>
+    <div class="term" id="termOut"><div class="tline dim">Connected to ${esc(name)} over the tunnel. Works like the MikroTik CLI: type <span class="mono">ip service</span> to enter a menu, then <span class="mono">print</span>; <span class="mono">..</span> goes up, <span class="mono">/</span> back to root, <span class="mono">/ip address print</span> runs absolute. ↑/↓ recall history; "clear" wipes the screen.</div></div>
     <div class="termbar">
-      <span class="tprompt">${esc(name)} &gt;</span>
+      <span class="tprompt" id="termPrompt"></span>
       <input id="termIn" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="/system resource print">
       <button class="primary" id="termRun">Run</button>
     </div>
   </details>`;
+  updateTermPrompt();
   $("termIn").addEventListener("keydown", onConsoleKey);
   $("termRun").addEventListener("click", () => runConsoleCmd());
+}
+function termPath() { return consoleState.path.length ? "/" + consoleState.path.join(" ") : "/"; }
+function updateTermPrompt() {
+  const el = $("termPrompt");
+  if (el) el.textContent = `[${consoleState.name}] ${termPath()} >`;
 }
 function termAppend(text, cls) {
   const out = $("termOut");
@@ -2025,15 +2065,43 @@ async function runConsoleCmd() {
   consoleState.history.push(cmd);
   consoleState.hIndex = consoleState.history.length;
   if (cmd === "clear" || cmd === "/clear") { $("termOut").innerHTML = ""; return; }
-  termAppend("> " + cmd, "cmd");
+  termAppend(termPath() + " > " + cmd, "cmd");
+
+  // ---- local navigation (no round trip needed)
+  if (cmd === "/") { consoleState.path = []; updateTermPrompt(); return; }
+  let tokens = cmd.split(/\s+/);
+  if (tokens.every((t) => t === "..")) {
+    consoleState.path = consoleState.path.slice(0, Math.max(0, consoleState.path.length - tokens.length));
+    updateTermPrompt();
+    return;
+  }
+  // Resolve against the current menu: absolute if the line starts with "/".
+  const absolute = cmd.startsWith("/");
+  if (absolute) {
+    tokens[0] = tokens[0].slice(1);
+    if (!tokens[0]) tokens = tokens.slice(1);
+  }
+  const resolved = absolute ? tokens : [...consoleState.path, ...tokens];
+  const command = "/" + resolved.join(" ");
+  // Pure menu words with no action verb = navigation, like the real CLI. We
+  // still round-trip it so a typo ("servicess") errors instead of navigating.
+  const pureWords = tokens.length > 0 && tokens.every((t) => /^[a-z][a-z0-9-]*$/i.test(t));
+  const isNav = pureWords && !ROS_VERBS.has(tokens[tokens.length - 1].toLowerCase());
+
   input.disabled = true;
   try {
     const res = await api("/api/routers/" + encodeURIComponent(consoleState.ref) + "/exec", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ command: cmd }),
+      body: JSON.stringify({ command }),
     });
     const out = (res.output || "").replace(/\s+$/, "");
-    termAppend(out || "(no output)", res.ok ? "" : "err");
+    if (isNav && res.ok && !/bad command name|syntax error|expected/i.test(out)) {
+      consoleState.path = resolved;
+      updateTermPrompt();
+      if (out) termAppend(out, "");
+    } else {
+      termAppend(out || "(no output)", res.ok && !/bad command name|syntax error|failure:/i.test(out) ? "" : "err");
+    }
   } catch (e) { termAppend("Error: " + e.message, "err"); }
   finally { input.disabled = false; input.focus(); }
 }
@@ -2189,6 +2257,90 @@ function renderTraffic() {
     <div class="chips" style="margin-top:4px">${t.samples} sample(s) in this window · compared with the preceding ${labelFor(t.hours)}.</div>`;
 }
 function labelFor(h) { const r = RANGES.find((x) => x.h === h); return r ? r.l : h + "h"; }
+
+/* ---------------- upstream ping (latency graph) ---------------- */
+let pingState = { hours: 24, data: null };
+const PING_RANGES = [{ h: 1, l: "1h" }, { h: 6, l: "6h" }, { h: 24, l: "24h" }, { h: 168, l: "7d" }];
+const PING_COLORS = ["#34d399", "#22d3ee", "#f5b301", "#38bdf8", "#c084fc", "#f472b6", "#fb923c", "#a3e635"];
+function setPingRange(h) { pingState.hours = h; loadPings(); }
+async function loadPings() {
+  const ref = profileState.ref;
+  const box = $("pPing");
+  if (!box || !ref) return;
+  try {
+    const d = await api("/api/routers/" + encodeURIComponent(ref) + "/pings?hours=" + pingState.hours);
+    if (profileState.ref !== ref || !$("pPing")) return;
+    pingState.data = d;
+    renderPings(d);
+  } catch (e) {
+    if ($("pPing")) $("pPing").innerHTML = `<p class="chips">Upstream ping unavailable: ${esc(e.message)}</p>`;
+  }
+}
+function renderPings(d) {
+  const box = $("pPing");
+  if (!box) return;
+  const ranges = PING_RANGES.map((r) => `<button class="${r.h === pingState.hours ? "on" : ""}" onclick="setPingRange(${r.h})">${r.l}</button>`).join("");
+  const hasData = d.targets.some((t) => (d.series[t] || []).length);
+  if (!d.enabled && !hasData) {
+    box.innerHTML = '<p class="chips">Upstream ping monitoring is off for this device — enable it under Monitoring.</p>';
+    return;
+  }
+  const legend = d.targets.map((t, i) => {
+    const pts = d.series[t] || [];
+    const last = pts[pts.length - 1];
+    const stat = !last ? "no data yet"
+      : last.loss >= 100 ? '<span style="color:var(--red)">unreachable</span>'
+      : `${last.rtt != null ? last.rtt.toFixed(1) + " ms" : "—"}${last.loss > 0 ? ` · <span style="color:var(--amber)">${last.loss}% loss</span>` : ""}`;
+    return `<span class="leg"><i style="background:${PING_COLORS[i % PING_COLORS.length]}"></i>${esc(t)} <span class="chips">${stat}</span></span>`;
+  }).join("");
+  box.innerHTML = `
+    <div class="prange">${ranges}${legend}</div>
+    ${hasData ? `<div class="pchart">${pingChartSVG(d)}</div>
+    <div class="chips" style="margin-top:4px">Pinged from the router every ${Math.round(d.intervalSeconds)}s${d.alertAboveMs ? ` · alerts above ${d.alertAboveMs} ms` : ""} · <span style="color:var(--red)">✕</span> = 100% loss, <span style="color:var(--amber)">●</span> = partial loss.</div>`
+    : '<p class="chips">No samples yet in this window — the router pings its anchors every minute; the graph fills in shortly.</p>'}`;
+}
+function pingChartSVG(d) {
+  const W = 860, H = 190, L = 46, R = 8, T = 10, B = 22;
+  const now = Date.now(), from = now - d.hours * 3600_000;
+  let maxR = 0;
+  for (const t of d.targets) for (const p of d.series[t] || []) if (p.rtt != null) maxR = Math.max(maxR, p.rtt);
+  if (d.alertAboveMs) maxR = Math.max(maxR, d.alertAboveMs * 1.15);
+  maxR = maxR > 0 ? Math.ceil(maxR * 1.15) : 10;
+  const x = (t) => L + ((t - from) / (now - from)) * (W - L - R);
+  const y = (v) => T + (1 - Math.min(v, maxR) / maxR) * (H - T - B);
+  const gapMs = Math.max((d.intervalSeconds || 60) * 4000, 120_000);
+  let out = "";
+  for (let g = 0; g <= 4; g++) {
+    const v = (maxR / 4) * g, gy = y(v);
+    out += `<line x1="${L}" y1="${gy}" x2="${W - R}" y2="${gy}" stroke="#16202b" stroke-width="1"/>` +
+      `<text x="${L - 5}" y="${gy + 3}" text-anchor="end" font-size="9" fill="#6b7d90" font-family="monospace">${v >= 100 ? Math.round(v) : v.toFixed(v >= 10 ? 0 : 1)}</text>`;
+  }
+  for (const f of [0, 0.5, 1]) {
+    const tt = from + (now - from) * f;
+    out += `<text x="${x(tt)}" y="${H - 6}" text-anchor="${f === 0 ? "start" : f === 1 ? "end" : "middle"}" font-size="9" fill="#6b7d90" font-family="monospace">${new Date(tt).toLocaleString([], d.hours > 48 ? { month: "short", day: "numeric" } : { hour: "2-digit", minute: "2-digit" })}</text>`;
+  }
+  if (d.alertAboveMs) out += `<line x1="${L}" y1="${y(d.alertAboveMs)}" x2="${W - R}" y2="${y(d.alertAboveMs)}" stroke="var(--red)" stroke-width="1" stroke-dasharray="4 4" opacity=".6"/>`;
+  d.targets.forEach((t, i) => {
+    const color = PING_COLORS[i % PING_COLORS.length];
+    const pts = (d.series[t] || []).filter((p) => p.t >= from);
+    let path = "", pen = false, prevT = 0;
+    const marks = [];
+    for (const p of pts) {
+      if (p.rtt == null || p.loss >= 100) { // full loss: break the line, mark a red ✕ on the baseline
+        pen = false;
+        marks.push(`<text x="${x(p.t)}" y="${y(0) + 1}" text-anchor="middle" font-size="9" fill="var(--red)" font-weight="bold">✕</text>`);
+        continue;
+      }
+      const px = x(p.t), py = y(p.rtt);
+      path += (!pen || p.t - prevT > gapMs) ? `M${px.toFixed(1)},${py.toFixed(1)}` : `L${px.toFixed(1)},${py.toFixed(1)}`;
+      pen = true; prevT = p.t;
+      if (p.loss > 0) marks.push(`<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="2.6" fill="var(--amber)"/>`);
+    }
+    if (path) out += `<path d="${path}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/>`;
+    out += marks.join("");
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="upstream ping latency">${out}</svg>`;
+}
 function cmpTile(label, cur, prevv, dir) {
   let delta = "";
   if (prevv > 0) {

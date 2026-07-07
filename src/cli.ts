@@ -11,6 +11,8 @@ import { startMonitor } from "./monitor.js";
 import { startLiveness } from "./liveness.js";
 import { startDeviceMonitor } from "./devicemonitor.js";
 import { MetricsStore, startMetricsSampler } from "./metrics.js";
+import { PingMetricsStore } from "./pingmetrics.js";
+import { startPingMonitor } from "./pingmonitor.js";
 import { HostStore } from "./hosts.js";
 import { startHostMonitor } from "./hostmonitor.js";
 import { MaintenanceStore, type MaintCategory } from "./maintenance.js";
@@ -55,6 +57,7 @@ program
     const issues = new IssueStore(config.issuesPath);
     const events = new EventLog(config.eventsPath);
     const metrics = new MetricsStore(config.metricsPath, config.metrics.retentionDays * 24 * 3600_000);
+    const pings = new PingMetricsStore(config.pingMetricsPath, config.upstreamPing.retentionDays * 24 * 3600_000);
     const hosts = new HostStore(config.hostsPath);
     const maintenance = new MaintenanceStore(config.maintenancePath);
     const outages = new OutageStore(config.outagesPath);
@@ -70,7 +73,7 @@ program
       groupOf: (serial) => store.findBySerial(serial)?.customerGroup,
     });
     const app = buildApp({
-      config, store, wg, alerter, issues, events, settings, metrics, hosts, maintenance, outages,
+      config, store, wg, alerter, issues, events, settings, metrics, pings, hosts, maintenance, outages,
       extraChats: () => [...escalation.seenChats.values()],
     });
     if (config.alerts.escalateAfterMinutes > 0) {
@@ -109,6 +112,13 @@ program
         config.metrics.sampleSeconds,
       );
       console.log(`metrics sampler: every ${config.metrics.sampleSeconds}s (traffic history, ${config.metrics.retentionDays}d retention)`);
+    }
+    if (config.upstreamPing.enabled) {
+      startPingMonitor(
+        { store, pings, issues, events, alerter, pingCount: config.upstreamPing.pingCount, suppressed },
+        config.upstreamPing.intervalSeconds,
+      );
+      console.log(`upstream ping: every ${config.upstreamPing.intervalSeconds}s (latency anchors, ${config.upstreamPing.retentionDays}d retention)`);
     }
     if (config.hosts.enabled) {
       startHostMonitor(

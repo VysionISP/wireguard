@@ -235,6 +235,16 @@ everything you manage on the right.
   current one, and tiles show total downloaded / uploaded with the percentage
   change vs. the preceding window. Pick any interface; it defaults to the
   busiest (usually the uplink). The management tunnel is excluded.
+- **Upstream ping** — every monitored router pings anchor IPs (8.8.8.8 and
+  1.1.1.1 by default; add your own, e.g. the POP gateway) once a minute *from
+  the router itself*, and the page graphs that latency per target over
+  1h / 6h / 24h / 7d. Partial loss shows as amber dots on the line, 100% loss
+  as red ✕ marks on the baseline. Sustained full loss (two consecutive ticks)
+  opens a warning issue + alert with a recovery notice when it clears, and an
+  optional per-device **latency threshold** (ms) flags sustained slow paths
+  the same way. Targets, on/off and the threshold live in the Monitoring
+  section; interval/retention under `upstreamPing` in `config.json`. Routers
+  that are themselves offline are skipped — liveness already reports those.
 - **Health** — temperature / voltage / fan sensors where the board exposes them.
 - **Ping test & monitored hosts / DHCP leases / IP addresses** — the router's
   live tables (see below for internal-host ping monitoring).
@@ -245,11 +255,14 @@ everything you manage on the right.
   and the config-backup list with diff / restore. Saving details or monitoring
   refreshes the panel in place without leaving the page.
 - **Console** (admin, full width at the bottom) — a terminal that CLIs into the
-  router over SSH: type a RouterOS command, see the output in the scrollback,
-  recall previous lines with ↑/↓, and `clear` to wipe the screen. Each line is
-  an independent SSH exec (the runner is stateless), so there's no persistent
-  shell context — suited to RouterOS's path-style commands. Every command is
-  audit-logged server-side.
+  router over SSH and behaves like the real MikroTik CLI: bare menu words
+  navigate (`ip` → `service` → `print`), `..` goes up, `/` returns to the
+  root, and `/ip address print` runs absolute without changing your menu; the
+  prompt shows where you are (`[identity] /ip service >`). ↑/↓ recall
+  history, `clear` wipes the screen. Under the hood each executed line is one
+  stateless SSH exec of the fully-resolved path — navigation is validated
+  against the router so a typo errors instead of "entering" a menu that
+  doesn't exist — and every command is audit-logged server-side.
 
 Traffic history is stored in `data/metrics.jsonl` and pruned to
 `metrics.retentionDays` (default 14). Sampling cadence and retention are set
@@ -556,6 +569,7 @@ require the admin role.
 | `GET /api/routers/:ref/live` | tech | Live stats over the tunnel (system, interfaces, LTE) |
 | `GET /api/routers/:ref/profile` | tech | Live profile: DHCP leases, IP addresses, health, firmware |
 | `GET /api/routers/:ref/traffic?hours=` | tech | Traffic history + previous-period comparison from stored metrics |
+| `GET /api/routers/:ref/pings?hours=` | tech | Upstream ping latency/loss series per target (8.8.8.8, 1.1.1.1, custom) |
 | `GET /api/reports/sla?from&to` | tech | Uptime/SLA per device, customer and fleet (maintenance-excluded) |
 | `POST /api/groups/:name/discover` | admin | Auto-discover map links from MikroTik neighbor tables |
 | `POST/DELETE /api/customers/:name/status-token` | admin | Enable/rotate / disable a customer's public status page |

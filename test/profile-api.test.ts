@@ -84,6 +84,42 @@ describe("POST /api/routers/:ref/ping", () => {
   });
 });
 
+describe("upstream ping API", () => {
+  it("PATCH monitoring accepts upstreamPing and GET /pings returns the series", async () => {
+    await register("HEX1", 1);
+    const patch = await request(app)
+      .patch("/api/routers/HEX1/monitoring")
+      .set("authorization", A())
+      .send({ upstreamPing: { enabled: true, targets: ["8.8.8.8", "9.9.9.9"], alertAboveMs: 150 } });
+    expect(patch.status).toBe(200);
+    expect(patch.body.monitoring.upstreamPing.targets).toEqual(["8.8.8.8", "9.9.9.9"]);
+
+    const res = await request(app).get("/api/routers/HEX1/pings?hours=24").set("authorization", A());
+    expect(res.status).toBe(200);
+    expect(res.body.enabled).toBe(true);
+    expect(res.body.configuredTargets).toEqual(["8.8.8.8", "9.9.9.9"]);
+    expect(res.body.alertAboveMs).toBe(150);
+    expect(res.body.series["9.9.9.9"]).toEqual([]);
+  });
+
+  it("rejects a non-IPv4 upstream target", async () => {
+    await register("HEX1", 1);
+    const patch = await request(app)
+      .patch("/api/routers/HEX1/monitoring")
+      .set("authorization", A())
+      .send({ upstreamPing: { enabled: true, targets: ["not-an-ip"] } });
+    expect(patch.status).toBe(400);
+  });
+
+  it("defaults to 8.8.8.8 + 1.1.1.1 when nothing is configured", async () => {
+    await register("HEX1", 1);
+    // Monitoring on (register default in tests may be off) — enable it.
+    await request(app).patch("/api/routers/HEX1/monitoring").set("authorization", A()).send({ enabled: true });
+    const res = await request(app).get("/api/routers/HEX1/pings").set("authorization", A());
+    expect(res.body.configuredTargets).toEqual(["8.8.8.8", "1.1.1.1"]);
+  });
+});
+
 describe("GET /api/routers/:ref/traffic", () => {
   it("returns per-interface throughput and a previous-period comparison", async () => {
     await register("HEX1", 1);
