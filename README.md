@@ -226,6 +226,9 @@ everything you manage on the right.
 - **Overview** (top tiles) — state, health, uptime, CPU, memory, board,
   ROS + firmware version (with an "upgrade available" flag when the
   RouterBOARD reports a newer firmware).
+- **Ports** (top diagram) — a live router faceplate showing every physical
+  port with its link status; click a port to set link / inverted-link /
+  traffic-threshold monitoring (admin).
 - **Traffic graph** — per-interface throughput over 1h / 6h / 24h / 7d / 30d,
   drawn from a background sampler that records each online device's counters
   every few minutes. The **previous period** is overlaid faintly behind the
@@ -236,7 +239,9 @@ everything you manage on the right.
 - **Ping test & monitored hosts / DHCP leases / IP addresses** — the router's
   live tables (see below for internal-host ping monitoring).
 - **Manage** (right column) — label, customer, SLA target and notes;
-  SSH / credential quick-copy; the monitoring toggles and interactive port map;
+  SSH / credential quick-copy; a collapsible **Monitoring** section (device
+  type + active-monitoring / login-alert toggles, with port monitoring driven
+  by the port diagram at the top);
   a **Run a command** box (admin) that executes an arbitrary RouterOS command
   over SSH and shows the output inline; and the config-backup list with diff /
   restore. Saving details or monitoring refreshes the panel in place without

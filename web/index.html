@@ -247,6 +247,12 @@
   .meta textarea { resize: vertical; min-height: 54px; }
   .meta label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
   .sub { color: var(--accent); font-size: 10.5px; margin: 16px 0 5px; text-transform: uppercase; letter-spacing: .12em; font-family: var(--mono); border-top: 1px solid var(--border); padding-top: 12px; }
+  details.collapse { border-top: 1px solid var(--border); margin-top: 4px; }
+  details.collapse > summary { color: var(--accent); font-size: 10.5px; margin: 0; padding: 12px 0 5px; text-transform: uppercase; letter-spacing: .12em; font-family: var(--mono); cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; user-select: none; }
+  details.collapse > summary::-webkit-details-marker { display: none; }
+  details.collapse > summary::before { content: "▸"; font-size: 9px; transition: transform .12s; color: var(--muted); }
+  details.collapse[open] > summary::before { transform: rotate(90deg); }
+  details.collapse > summary:hover { color: var(--text); }
   .translist, .backlist { font-size: 13px; }
   .translist div, .backlist div { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
   .backlist a { color: var(--accent); cursor: pointer; text-decoration: none; }
@@ -1469,6 +1475,8 @@ function portGroupKey(i) {
 }
 async function loadPortMap(ref) {
   const box = $("portmap");
+  if (!box) return;
+  $("pPorts")?.classList.remove("hidden"); // reveal the port diagram at the top of the page
   // Claim ownership up-front so a stale in-flight load for another device can
   // detect it was superseded and bail (opening device B while A's tunnel
   // fetch is still pending must not write A's ports into B's dialog).
@@ -1602,7 +1610,7 @@ async function saveMonitoring(ref) {
   // Prefer the rich per-port rules from the faceplate; fall back to the typed
   // field if the port map never loaded (device offline).
   let ports;
-  if (portState.ref === ref && portState.rules.size >= 0 && $("portmap").querySelector(".faceplate")) {
+  if (portState.ref === ref && portState.rules.size >= 0 && $("portmap")?.querySelector(".faceplate")) {
     ports = [...portState.rules.values()].map((r) => ({
       name: r.name, link: !!r.link, inverted: !!r.inverted,
       highBps: r.highBps || 0, lowBps: r.lowBps || 0,
@@ -1789,6 +1797,7 @@ async function openDevice(ref) {
   $("pControls").innerHTML = "";
   $("pBody").innerHTML = `
     <div id="pOverview"></div>
+    <div id="pPorts" class="hidden"><div class="sub">Ports</div><div id="portmap"></div></div>
     <div class="pgrid">
       <div class="pcol">
         <div class="sub">Traffic</div><div id="pTraffic"><p class="chips">…</p></div>
@@ -1902,8 +1911,9 @@ function renderManage(r, backups, devEvents) {
       <div class="row"><span>password</span><code class="mono">••••••••</code><button data-copy="${esc(r.password)}">Copy</button></div>
       <div class="row"><span>REST</span><code class="mono">http://${esc(r.tunnelIp)}/rest/</code><button data-copy="http://${esc(r.tunnelIp)}/rest/">Copy</button></div>
     </div>` : ""}
-    <div class="sub">Monitoring</div>
-    ${isAdmin() ? `<div class="montoggles">
+    ${isAdmin() ? `<details class="collapse" open>
+      <summary>Monitoring</summary>
+      <div class="montoggles">
       <div class="r"><span class="chips">Device type</span>
         <select id="monType">
           <option value="customer" ${dtype === "customer" ? "selected" : ""}>Customer CPE</option>
@@ -1911,11 +1921,11 @@ function renderManage(r, backups, devEvents) {
         </select></div>
       <label><input type="checkbox" id="monEnabled" ${mon.enabled ? "checked" : ""}> Active monitoring (poll this device over the tunnel)</label>
       <label><input type="checkbox" id="monLogin" ${mon.alertOnLogin ? "checked" : ""}> Alert &amp; log on router login</label>
-      <div class="r"><span class="chips">Port monitoring — click a port to set link status, inverted link, or traffic alerts.</span></div>
-      <div id="portmap"><span class="chips">loading ports…</span></div>
+      <div class="r"><span class="chips">Port monitoring — click a port in the diagram at the top of the page to set link status, inverted link, or traffic alerts.</span></div>
       <input id="monIfaces" type="hidden" value="${esc((mon.watchInterfaces || []).join(", "))}">
       <div><button class="primary" data-act="savemon" data-ref="${esc(r.id)}">Save monitoring</button></div>
-    </div>` : `<div class="chips">Type: <span class="dtype ${esc(dtype)}">${esc(dtype)}</span> · monitoring ${mon.enabled ? "on" : "off"} (admin can change)</div>`}
+      </div>
+    </details>` : `<div class="sub">Monitoring</div><div class="chips">Type: <span class="dtype ${esc(dtype)}">${esc(dtype)}</span> · monitoring ${mon.enabled ? "on" : "off"} (admin can change)</div>`}
     ${isAdmin() && r.tunnelIp && r.state !== "staged" && r.state !== "revoked" ? `<div class="sub">Run a command</div>
       <div class="row2"><input id="execCmd" placeholder="/system/resource/print" style="flex:1;min-width:200px;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:6px 9px;font-family:var(--mono);font-size:12px">
         <button data-act="exec" data-ref="${esc(r.id)}">Run</button></div>
