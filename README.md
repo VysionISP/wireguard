@@ -242,10 +242,14 @@ everything you manage on the right.
   SSH / credential quick-copy; a collapsible **Monitoring** section (device
   type + active-monitoring / login-alert toggles, with port monitoring driven
   by the port diagram at the top);
-  a **Run a command** box (admin) that executes an arbitrary RouterOS command
-  over SSH and shows the output inline; and the config-backup list with diff /
-  restore. Saving details or monitoring refreshes the panel in place without
-  leaving the page.
+  and the config-backup list with diff / restore. Saving details or monitoring
+  refreshes the panel in place without leaving the page.
+- **Console** (admin, full width at the bottom) — a terminal that CLIs into the
+  router over SSH: type a RouterOS command, see the output in the scrollback,
+  recall previous lines with ↑/↓, and `clear` to wipe the screen. Each line is
+  an independent SSH exec (the runner is stateless), so there's no persistent
+  shell context — suited to RouterOS's path-style commands. Every command is
+  audit-logged server-side.
 
 Traffic history is stored in `data/metrics.jsonl` and pruned to
 `metrics.retentionDays` (default 14). Sampling cadence and retention are set
