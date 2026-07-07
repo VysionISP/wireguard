@@ -211,10 +211,13 @@ Handy for diagnosing "internet is slow" without a truck roll.
 
 ## Device page
 
-The **Open** button on each router opens one full page for that device — the
-old details and profile modals are merged into it. The header carries the
-device controls; the body is a two-column layout with live telemetry on the
-left and everything you manage on the right.
+The **Open** button on each router (and clicking a map node) navigates to a
+full in-app page for that device — a real routed view, not a modal, so the
+browser Back button and a refresh both work and the URL (`#device/<id>`) is
+shareable. A **← Back** button returns to the fleet. The old details and
+profile modals are merged into it: the header bar carries the device controls,
+and the body is a two-column layout with live telemetry on the left and
+everything you manage on the right.
 
 - **Controls** (header) — **Verify** reachability, **Live stats** stream,
   **Back up now**, **Reboot** (admin; confirms first, then issues

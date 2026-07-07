@@ -208,9 +208,11 @@
   dialog .dhead { display: flex; align-items: center; padding: 13px 18px; border-bottom: 1px solid var(--border2); background: linear-gradient(180deg, #0e151d, #0b1017); }
   dialog .dhead h3 { margin: 0; font-size: 13px; flex: 1; font-family: var(--mono); text-transform: uppercase; letter-spacing: .08em; }
   dialog.wide { max-width: 1000px; }
-  dialog.full { max-width: 1180px; width: calc(100vw - 32px); }
-  dialog.full .dbody { max-height: calc(100vh - 96px); }
-  .pctrls { display: flex; gap: 6px; flex-wrap: wrap; margin-right: 8px; }
+  .devbar { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border2); flex-wrap: wrap; }
+  .devbar h2 { margin: 0; font-size: 15px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+  .devbar .spacer { flex: 1; }
+  .backbtn { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  .pctrls { display: flex; gap: 6px; flex-wrap: wrap; }
   .pctrls button { text-transform: none; letter-spacing: 0; font-size: 12px; }
   .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; align-items: start; }
   @media (max-width: 860px) { .pgrid { grid-template-columns: 1fr; } }
@@ -807,6 +809,17 @@
       </div>
     </div>
   </section>
+
+  <!-- DEVICE PAGE -->
+  <section id="tab-device" class="hidden">
+    <div class="devbar">
+      <button class="backbtn" onclick="closeProfile()">← Back</button>
+      <h2 id="pTitle"></h2>
+      <span class="spacer"></span>
+      <span class="pctrls" id="pControls"></span>
+    </div>
+    <div id="pBody"></div>
+  </section>
 </div>
 
 <dialog id="modal">
@@ -814,10 +827,6 @@
   <div class="dbody" id="mBody"></div>
 </dialog>
 
-<dialog id="profile" class="wide full">
-  <div class="dhead"><h3 id="pTitle"></h3><span class="pctrls" id="pControls"></span><button onclick="closeProfile()">Close</button></div>
-  <div class="dbody" id="pBody"></div>
-</dialog>
 
 <dialog id="portcfg">
   <div class="dhead"><h3 id="pcTitle"></h3><button onclick="document.getElementById('portcfg').close()">Close</button></div>
@@ -921,6 +930,7 @@ function statusCell(r) {
 
 /* ---------------- tabs ---------------- */
 function showTab(name) {
+  stopLiveStream(); // leaving the device page (if we were on it) drops its live stream
   for (const s of document.querySelectorAll("section[id^=tab-]")) s.classList.add("hidden");
   $("tab-" + name).classList.remove("hidden");
   for (const b of document.querySelectorAll("nav.tabs button")) b.classList.toggle("active", b.dataset.tab === name);
@@ -1031,8 +1041,18 @@ async function saveGeneral() {
   } catch (e) { toast(e.message); }
 }
 function curTab() {
+  if (!$("tab-device").classList.contains("hidden")) return "device";
   const b = document.querySelector("nav.tabs button.active");
   return b ? b.dataset.tab : "status";
+}
+
+/* ---------------- hash router (tabs + device page) ---------------- */
+const TAB_NAMES = ["status", "fleet", "map", "events", "reports", "bulk", "settings", "audit"];
+function applyRoute() {
+  const h = decodeURIComponent(location.hash.replace(/^#\/?/, ""));
+  if (h.startsWith("device/")) { openDevice(h.slice(7)).catch((e) => { if (e.message !== "unauthorized") toast(e.message); }); return; }
+  const tab = h.split("/")[0];
+  showTab(TAB_NAMES.includes(tab) ? tab : "status");
 }
 
 /* ---------------- status board ---------------- */
@@ -1745,14 +1765,26 @@ function openLive(ref) {
 
 /* ---------------- device page (profile + manage + control) ---------------- */
 let profileState = { ref: null, hours: 24, iface: null, traffic: null };
-function closeProfile() { $("profile").close(); stopLiveStream(); profileState = { ref: null, hours: 24, iface: null, traffic: null }; }
+// The device page is a real view (not a modal); leaving it just routes away.
+function closeProfile() { location.hash = "#fleet"; }
 const RANGES = [{ h: 1, l: "1h" }, { h: 6, l: "6h" }, { h: 24, l: "24h" }, { h: 168, l: "7d" }, { h: 720, l: "30d" }];
-// Back-compat: the fleet/map still call openProfile/openDetails.
-const openProfile = openDevice;
+// The fleet rows and map nodes navigate to the device page by URL; the router
+// (applyRoute) is what actually renders it, so history/back and refresh work.
+function gotoDevice(ref) { location.hash = "#device/" + encodeURIComponent(ref); }
+const openProfile = gotoDevice;
+
+function showDeviceView() {
+  stopMapStream();
+  for (const s of document.querySelectorAll("section[id^=tab-]")) s.classList.add("hidden");
+  $("tab-device").classList.remove("hidden");
+  for (const b of document.querySelectorAll("nav.tabs button")) b.classList.remove("active");
+  window.scrollTo(0, 0);
+}
 
 async function openDevice(ref) {
   profileState = { ref, hours: 24, iface: null, traffic: null };
   portState = { ref: null, rules: new Map() };
+  showDeviceView();
   $("pTitle").textContent = "Device";
   $("pControls").innerHTML = "";
   $("pBody").innerHTML = `
@@ -1764,7 +1796,6 @@ async function openDevice(ref) {
       </div>
       <div class="pcol"><div id="pManage"></div></div>
     </div>`;
-  $("profile").showModal();
 
   // Inventory data (always available) drives the header, controls and manage
   // panel; the live profile (over the tunnel) fills tiles/traffic/DHCP/hosts.
@@ -2598,7 +2629,10 @@ document.addEventListener("click", async (ev) => {
   finally { if (act === "verify") { btn.disabled = false; btn.textContent = "Verify"; } }
 });
 
-for (const b of document.querySelectorAll("nav.tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
+// Tabs and the device page are URL-driven so the browser Back button and a
+// page refresh land you where you were; clicks just set the hash.
+for (const b of document.querySelectorAll("nav.tabs button")) b.addEventListener("click", () => { location.hash = "#" + b.dataset.tab; });
+window.addEventListener("hashchange", () => { if (!$("app").classList.contains("hidden")) applyRoute(); });
 
 async function doLogin() {
   const username = $("uInput").value.trim();
@@ -2633,7 +2667,7 @@ async function start() {
   $("app").classList.remove("hidden");
   $("whoami").textContent = `${me.username} · ${me.role}`;
   for (const el of document.querySelectorAll(".adminOnly")) el.classList.toggle("hidden", !isAdmin());
-  showTab("status");
+  applyRoute(); // honour a deep-link (#device/… or a tab) on load; defaults to status
   try { await load(); } catch (e) { if (e.message !== "unauthorized") toast(e.message); }
   clearInterval(timer);
   // Slower full refresh as a fallback; the live stream does the fast updates.
