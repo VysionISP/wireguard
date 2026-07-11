@@ -77,13 +77,14 @@ export interface AppDeps {
 }
 
 interface AuthedRequest extends Request {
-  authUser?: { username: string; role: Role };
+  authUser?: { username: string; role: Role; customerGroup?: string };
 }
 
 // Works from both src/ (tsx dev) and dist/ (build) — web/ sits beside them.
 const WEB_INDEX = fileURLToPath(new URL("../web/index.html", import.meta.url));
 const WEB_NOC = fileURLToPath(new URL("../web/noc.html", import.meta.url));
 const WEB_STATUS = fileURLToPath(new URL("../web/status.html", import.meta.url));
+const WEB_PORTAL = fileURLToPath(new URL("../web/portal.html", import.meta.url));
 
 const registerSchema = z.object({
   token: z.string(),
@@ -388,13 +389,18 @@ export function buildApp(deps: AppDeps): Express {
   // ------------------------------------------------------- admin API + UI
 
   // Resolve a bearer/query token to a user (session or legacy admin token).
-  function userFromToken(raw: string): { username: string; role: Role } | null {
+  function userFromToken(raw: string): { username: string; role: Role; customerGroup?: string } | null {
     if (!raw) return null;
     const sess = sessions.get(raw);
-    if (sess) return { username: sess.username, role: sess.role };
+    if (sess) return { username: sess.username, role: sess.role, customerGroup: sess.customerGroup };
     if (tokenEquals(raw, config.auth.adminToken)) return { username: "admin-token", role: "admin" };
     return null;
   }
+
+  // Role hierarchy: admin > tech > customer. requireRole(min) admits anyone at
+  // or above `min`. This is what keeps a customer account off the tech/admin
+  // API (the fleet, credentials, config) — it can only reach the portal.
+  const ROLE_RANK: Record<Role, number> = { customer: 0, tech: 1, admin: 2 };
 
   // Auth: a dashboard session token (user accounts) or the legacy admin
   // token (break-glass / API scripting, always role admin).
@@ -407,8 +413,8 @@ export function buildApp(deps: AppDeps): Express {
         res.status(401).json({ error: "unauthorized" });
         return;
       }
-      if (min === "admin" && user.role !== "admin") {
-        res.status(403).json({ error: "admin role required" });
+      if (ROLE_RANK[user.role] < ROLE_RANK[min]) {
+        res.status(403).json({ error: `${min} role required` });
         return;
       }
       (req as AuthedRequest).authUser = user;
@@ -416,6 +422,7 @@ export function buildApp(deps: AppDeps): Express {
     };
   const requireAdmin = requireRole("admin");
   const requireTech = requireRole("tech");
+  const requireCustomer = requireRole("customer"); // any authenticated account
   const who = (req: Request): string => (req as AuthedRequest).authUser?.username ?? "?";
 
   // ---- login / sessions
@@ -433,24 +440,24 @@ export function buildApp(deps: AppDeps): Express {
       res.status(401).json({ error: "invalid username or password" });
       return;
     }
-    const session = sessions.create(user.username, user.role);
+    const session = sessions.create(user.username, user.role, user.customerGroup);
     audit.log(user.username, "login", "-");
-    res.json({ session: session.token, username: user.username, role: user.role });
+    res.json({ session: session.token, username: user.username, role: user.role, customerGroup: user.customerGroup ?? null });
   });
 
-  app.post("/api/logout", requireTech, (req: Request, res: Response) => {
+  app.post("/api/logout", requireCustomer, (req: Request, res: Response) => {
     const raw = (req.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
     sessions.destroy(raw);
     res.json({ ok: true });
   });
 
   // Who am I — lets the UI restore a session and adapt to the role.
-  app.get("/api/me", requireTech, (req: Request, res: Response) => {
+  app.get("/api/me", requireCustomer, (req: Request, res: Response) => {
     res.json((req as AuthedRequest).authUser);
   });
 
   // Change your own password (real accounts only, not the admin-token login).
-  app.post("/api/account/password", requireTech, (req: Request, res: Response) => {
+  app.post("/api/account/password", requireCustomer, (req: Request, res: Response) => {
     const parsed = z
       .object({ current: z.string().max(256), next: z.string().max(256) })
       .safeParse(req.body);
@@ -768,22 +775,27 @@ export function buildApp(deps: AppDeps): Express {
     const parsed = z
       .object({
         username: z.string().max(32),
-        role: z.enum(["admin", "tech"]),
+        role: z.enum(["admin", "tech", "customer"]),
         password: z.string().max(256).optional(),
+        customerGroup: z.string().max(120).optional(),
       })
       .safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "invalid request" });
       return;
     }
+    if (parsed.data.role === "customer" && !customers.get(parsed.data.customerGroup ?? "")) {
+      res.status(400).json({ error: "customer accounts need an existing customer group" });
+      return;
+    }
     const password = parsed.data.password ?? generatePassword(16);
     try {
-      users.add(parsed.data.username, password, parsed.data.role);
+      users.add(parsed.data.username, password, parsed.data.role, parsed.data.customerGroup);
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
       return;
     }
-    audit.log(who(req), "user.add", parsed.data.username, parsed.data.role);
+    audit.log(who(req), "user.add", parsed.data.username, parsed.data.role + (parsed.data.customerGroup ? `:${parsed.data.customerGroup}` : ""));
     // Password is returned exactly once, at creation.
     res.json({ ok: true, username: parsed.data.username, password });
   });
@@ -1714,6 +1726,97 @@ export function buildApp(deps: AppDeps): Express {
       map,
       uptime30d: eff > 0 ? Math.max(0, (1 - down / eff) * 100) : 100,
     });
+  });
+
+  // ---- authenticated customer portal (read-only, scoped to one customer) ---
+  // Resolve the group the logged-in account is allowed to see. Admin/tech
+  // accounts have no group, so they can't use the portal API.
+  function portalGroup(req: Request, res: Response): string | null {
+    const g = (req as AuthedRequest).authUser?.customerGroup;
+    if (!g) {
+      res.status(403).json({ error: "this account is not a customer portal account" });
+      return null;
+    }
+    return g;
+  }
+
+  app.get("/api/portal/overview", requireCustomer, (req: Request, res: Response) => {
+    const group = portalGroup(req, res);
+    if (!group) return;
+    const routers = groupRouters(group).filter((r) => r.state !== "staged" && r.state !== "revoked");
+    const now = Date.now();
+    const from = now - 30 * 24 * 3600_000;
+    const outByserial = new Map<string, Span[]>();
+    for (const o of outages.list()) {
+      const arr = outByserial.get(o.serialNumber) ?? outByserial.set(o.serialNumber, []).get(o.serialNumber)!;
+      arr.push({ start: Date.parse(o.startAt), end: o.endAt ? Date.parse(o.endAt) : now });
+    }
+    const hostState = (st: string | undefined): string => (st === "up" ? "up" : st === "warning" ? "degraded" : st === "offline" ? "down" : "unknown");
+    const devices = routers.map((r) => {
+      const maint = maintenance.windowsCovering(r.serialNumber, r.customerGroup, "offline").map((w) => ({ start: Date.parse(w.startsAt), end: Date.parse(w.endsAt) }));
+      const sla = computeSla({ createdAt: Date.parse(r.createdAt), from, to: now, outages: outByserial.get(r.serialNumber) ?? [], maintenance: maint });
+      const state = r.health === "warning" ? "degraded" : (r.health ? r.health !== "offline" : r.lastOnline !== false) ? "up" : "down";
+      const target = r.slaTarget && r.slaTarget > 0 ? r.slaTarget : null;
+      return {
+        id: r.id,
+        label: r.label || r.identity || r.serialNumber,
+        kind: r.deviceType ?? "customer",
+        state,
+        upSince: state === "up" ? ([...(r.transitions ?? [])].reverse().find((t) => t.online)?.at ?? null) : null,
+        uptime30d: sla.uptimePct,
+        slaTarget: target,
+        meetsSla: target === null ? null : sla.uptimePct + 1e-9 >= target,
+        hosts: hosts.forRouter(r.serialNumber).filter((h) => h.enabled).map((h) => ({ label: h.name || "Equipment", state: hostState(h.state) })),
+      };
+    });
+    const serials = new Set(routers.map((r) => r.serialNumber));
+    const incidents = issues.list(false).filter((i) => serials.has(i.serialNumber) && i.type !== "login").map((i) => ({ label: i.label, type: i.type, since: i.openedAt }));
+    const maint = maintenance.active()
+      .filter((w) => w.scopeKind === "all" || (w.scopeKind === "customer" && w.scopeValue === group) || (w.scopeKind === "device" && routers.some((r) => r.serialNumber === w.scopeValue)))
+      .map((w) => ({ note: w.note, endsAt: w.endsAt }));
+    const contact = customers.get(group);
+    res.json({
+      customer: group,
+      contact: contact ? { contact: contact.contact ?? "", phone: contact.phone ?? "" } : null,
+      at: new Date(now).toISOString(),
+      overall: incidents.length === 0 && devices.every((d) => d.state === "up") ? "operational" : devices.some((d) => d.state === "down") ? "outage" : "degraded",
+      devices,
+      incidents,
+      maintenance: maint,
+    });
+  });
+
+  app.get("/api/portal/devices/:id/traffic", requireCustomer, (req: Request, res: Response) => {
+    const group = portalGroup(req, res);
+    if (!group) return;
+    const router = store.find(req.params.id);
+    // 404 (not 403) for a device outside the customer's group, so the portal
+    // can't be used to probe which ids exist.
+    if (!router || router.customerGroup !== group || router.state === "staged" || router.state === "revoked") {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const hours = Math.min(720, Math.max(1, Number(req.query.hours) || 24));
+    const windowMs = hours * 3600_000;
+    const now = Date.now();
+    const exclude = new Set([config.router.wgInterfaceName]);
+    const all = metrics.samples(router.serialNumber, now - windowMs * 2);
+    const curr = all.filter((s) => s.at >= now - windowMs);
+    const prev = all.filter((s) => s.at >= now - windowMs * 2 && s.at < now - windowMs);
+    const c = computeTraffic(curr, config.metrics.sampleSeconds, exclude);
+    const pr = computeTraffic(prev, config.metrics.sampleSeconds, exclude);
+    let busiest: string | null = null, best = -1;
+    for (const [name, t] of Object.entries(c.totals)) { const v = t.rx + t.tx; if (v > best) { best = v; busiest = name; } }
+    res.json({
+      hours, sampleSeconds: config.metrics.sampleSeconds,
+      interfaces: c.interfaces, series: c.series, totals: c.totals,
+      prevSeries: pr.series, prevTotals: pr.totals, busiest, samples: curr.length,
+      label: router.label || router.identity || router.serialNumber,
+    });
+  });
+
+  app.get("/portal", (_req: Request, res: Response) => {
+    res.sendFile(WEB_PORTAL);
   });
 
   app.get("/status/:token", (_req: Request, res: Response) => {

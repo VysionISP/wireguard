@@ -2,11 +2,13 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-export type Role = "admin" | "tech";
+export type Role = "admin" | "tech" | "customer";
 
 export interface User {
   username: string;
   role: Role;
+  /** For role "customer": the customer group this account may view. */
+  customerGroup?: string;
   salt: string;
   hash: string;
   createdAt: string;
@@ -16,6 +18,7 @@ export interface Session {
   token: string;
   username: string;
   role: Role;
+  customerGroup?: string;
   expiresAt: number;
 }
 
@@ -44,14 +47,16 @@ export class UserStore {
     return this.users.map(({ salt: _s, hash: _h, ...rest }) => rest);
   }
 
-  add(username: string, password: string, role: Role): void {
+  add(username: string, password: string, role: Role, customerGroup?: string): void {
     if (!/^[a-z0-9._-]{2,32}$/i.test(username)) throw new Error("invalid username");
     if (password.length < 8) throw new Error("password must be at least 8 characters");
     if (this.users.some((u) => u.username === username)) throw new Error("user already exists");
+    if (role === "customer" && !customerGroup) throw new Error("customer accounts need a customer group");
     const salt = crypto.randomBytes(16).toString("hex");
     this.users.push({
       username,
       role,
+      ...(role === "customer" && customerGroup ? { customerGroup } : {}),
       salt,
       hash: hashPassword(password, salt),
       createdAt: new Date().toISOString(),
@@ -100,11 +105,12 @@ export class SessionManager {
 
   constructor(private readonly ttlHours: number) {}
 
-  create(username: string, role: Role): Session {
+  create(username: string, role: Role, customerGroup?: string): Session {
     const s: Session = {
       token: "sess-" + crypto.randomBytes(24).toString("hex"),
       username,
       role,
+      ...(customerGroup ? { customerGroup } : {}),
       expiresAt: Date.now() + this.ttlHours * 3600_000,
     };
     this.sessions.set(s.token, s);

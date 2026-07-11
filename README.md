@@ -121,6 +121,13 @@ directly — the token is saved to the browser and stripped from the address bar
 
 ## Users & roles
 
+The dashboard supports named accounts with three roles:
+
+- **tech** — view the fleet, verify routers, see live stats, view/download backups
+- **admin** — everything, plus revoke, bulk commands, tokens, users, restore staging
+- **customer** — a read-only **customer portal** (see below), scoped to a single
+  customer group; no access to the ops dashboard or any staff API
+
 The dashboard supports named accounts with two roles:
 
 - **tech** — view the fleet, verify routers, see live stats, view/download backups
@@ -337,6 +344,26 @@ unattended — those are surfaced for a human. Every fix is audit-logged.
 `GET /api/routers/:ref/compliance` runs a live check (tech), `GET
 /api/compliance` is the cached fleet roll-up (tech), `POST
 /api/routers/:ref/compliance/fix` remediates (admin).
+
+## Customer portal
+
+Customers get their own **read-only login** at `http://<server>:8442/portal` —
+distinct from the shared-link public status page. Create a **customer** account
+in the Users tab and tie it to one customer group; that account sees *only* that
+customer's devices and nothing else. The portal shows, per device:
+
+- live status (online / degraded / down) and how long it's been up,
+- **30-day uptime vs the committed SLA** (green when meeting it, red when below),
+- connected equipment the router ping-monitors (by name, never the LAN IP),
+- a **traffic graph** with a previous-period comparison, per interface / range.
+
+It refreshes every 30 s and carries a planned-maintenance banner. Crucially it
+is enforced server-side: the role hierarchy (admin > tech > customer) keeps a
+customer token off every staff endpoint (the fleet, credentials, config,
+upgrades, console…), and the portal's own endpoints resolve the device set from
+the *session's* customer group — a customer can't read another customer's
+device even by guessing its id (it 404s, so ids can't be probed). Customer
+accounts that try the main dashboard are redirected to the portal.
 
 ## Status board & device monitoring
 
@@ -631,6 +658,8 @@ require the admin role.
 | `POST /api/groups/:name/discover` | admin | Auto-discover map links from MikroTik neighbor tables |
 | `POST/DELETE /api/customers/:name/status-token` | admin | Enable/rotate / disable a customer's public status page |
 | `GET /status/:token` + `/api/status/:token` | public (token) | Read-only customer status page + its JSON |
+| `GET /portal` + `/api/portal/overview` | customer | Authenticated per-customer portal (own devices, SLA, uptime) |
+| `GET /api/portal/devices/:id/traffic` | customer | Traffic history for one of the account's own devices |
 | `GET/POST /api/maintenance` | tech / admin | List / schedule maintenance windows |
 | `DELETE /api/maintenance/:id` | admin | Cancel a maintenance window |
 | `POST /api/routers/:ref/ping` | tech | One-off ping test from the router to a LAN address |

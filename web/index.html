@@ -647,10 +647,11 @@
         <div class="pad row2">
           <div class="field"><label>Username</label><input id="usName" placeholder="tech1"></div>
           <div class="field"><label>Password (blank = generate)</label><input id="usPass" type="text" placeholder="min 8 chars"></div>
-          <div class="field"><label>Role</label><select id="usRole"><option value="tech">tech</option><option value="admin">admin</option></select></div>
+          <div class="field"><label>Role</label><select id="usRole"><option value="tech">tech</option><option value="admin">admin</option><option value="customer">customer</option></select></div>
+          <div class="field hidden" id="usGroupField"><label>Customer</label><input id="usGroup" list="usCustList" placeholder="which customer"><datalist id="usCustList"></datalist></div>
           <button class="primary" id="usBtn" style="align-self:flex-end">Add</button>
         </div>
-        <div class="pad chips" style="padding-top:0"><b>tech</b> = view, verify, live stats, backups. <b>admin</b> = everything (revoke, bulk, tokens, users, restore).</div>
+        <div class="pad chips" style="padding-top:0"><b>tech</b> = view, verify, live stats, backups. <b>admin</b> = everything (revoke, bulk, tokens, users, restore). <b>customer</b> = read-only portal at <span class="mono">/portal</span> for their own devices only (SLA, uptime, traffic).</div>
       </div>
       <div class="panel">
         <h2>Users</h2>
@@ -2547,10 +2548,11 @@ async function createToken() {
 
 /* ---------------- users ---------------- */
 async function loadUsers() {
-  const list = await api("/api/users");
+  const [list, custs] = await Promise.all([api("/api/users"), api("/api/customers").catch(() => [])]);
   $("userEmpty").classList.toggle("hidden", list.length > 0);
+  const dl = $("usCustList"); if (dl) dl.innerHTML = custs.map((c) => `<option value="${esc(c.name)}"></option>`).join("");
   $("userRows").innerHTML = list.map((u) => `<tr>
-    <td>${esc(u.username)}</td><td><span class="role">${esc(u.role)}</span></td>
+    <td>${esc(u.username)}</td><td><span class="role">${esc(u.role)}</span>${u.customerGroup ? ` <span class="chips">${esc(u.customerGroup)}</span>` : ""}</td>
     <td>${fmtDate(u.createdAt)}</td>
     <td class="actions">
       <button data-usreset="${esc(u.username)}">Reset password</button>
@@ -2562,16 +2564,18 @@ async function addUser() {
   const username = $("usName").value.trim();
   const password = $("usPass").value;
   const role = $("usRole").value;
+  const customerGroup = $("usGroup").value.trim();
   if (!username) return toast("Enter a username");
   if (password && password.length < 8) return toast("Password must be at least 8 characters (or leave it blank to generate one)");
+  if (role === "customer" && !customerGroup) return toast("Pick the customer this account can view");
   try {
     const r = await api("/api/users", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username, role, password: password || undefined }),
+      body: JSON.stringify({ username, role, password: password || undefined, customerGroup: role === "customer" ? customerGroup : undefined }),
     });
-    $("usName").value = ""; $("usPass").value = "";
+    $("usName").value = ""; $("usPass").value = ""; $("usGroup").value = "";
     $("mTitle").textContent = "User created";
-    $("mBody").innerHTML = `<p><b>${esc(r.username)}</b> can now sign in.</p>
+    $("mBody").innerHTML = `<p><b>${esc(r.username)}</b> can now sign in${role === "customer" ? ` at <span class="mono">/portal</span> (read-only, ${esc(customerGroup)} only)` : ""}.</p>
       <div class="cred"><div class="row"><span>password</span><code class="mono">${esc(r.password)}</code>
       <button data-copy="${esc(r.password)}">Copy</button></div></div>
       <p class="chips" style="margin-top:8px">Shown once — share it securely.</p>`;
@@ -3161,6 +3165,9 @@ async function start() {
     if (e.message !== "unauthorized") { showLogin(e.message); }
     return;
   }
+  // Customer accounts have no place in the ops dashboard — send them to their
+  // read-only portal instead.
+  if (me.role === "customer") { location.replace("/portal"); return; }
   $("login").classList.add("hidden");
   $("app").classList.remove("hidden");
   $("whoami").textContent = `${me.username} · ${me.role}`;
@@ -3237,6 +3244,7 @@ $("bulkAll").addEventListener("change", updateBulkInfo);
 $("bulkRun").addEventListener("click", runBulk);
 $("tkBtn").addEventListener("click", () => createToken().catch((e) => toast(e.message)));
 $("usBtn").addEventListener("click", addUser);
+$("usRole").addEventListener("change", (e) => $("usGroupField").classList.toggle("hidden", e.target.value !== "customer"));
 $("cmpCheckAll").addEventListener("click", () => checkAllCompliance().catch((e) => toast(e.message)));
 $("fwCheckSel").addEventListener("click", () => fwCheckSelected().catch((e) => toast(e.message)));
 $("fwUpgradeSel").addEventListener("click", () => fwUpgrade(selectedSerials()));
