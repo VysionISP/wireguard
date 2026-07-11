@@ -587,6 +587,7 @@
       <button data-sub="notify">Notifications</button>
       <button data-sub="maint">Maintenance</button>
       <button data-sub="firmware">Firmware</button>
+      <button data-sub="compliance">Compliance</button>
     </nav>
 
     <!-- CUSTOMERS -->
@@ -725,6 +726,24 @@
     </div>
 
     <!-- MAINTENANCE -->
+    <!-- COMPLIANCE -->
+    <div class="subsec hidden" id="set-compliance">
+      <div class="panel">
+        <div class="panelhead"><h2>Config compliance</h2><span class="chips" id="cmpSummary"></span></div>
+        <div class="pad">
+          <div class="row2" style="margin-bottom:8px"><button id="cmpCheckAll" class="primary">Check all online devices</button></div>
+          <div class="chips">Compares each device's live config against the provisioning hardening baseline (disabled services, DNS, NTP, identity, the management firewall rule). Drift — someone re-enabling telnet, a factory reset wiping DNS — shows up here. Fixable items can be re-applied from a device's page.</div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Device</th><th>Customer</th><th>Health</th><th>Compliance</th><th>Issues</th><th>Checked</th></tr></thead>
+            <tbody id="cmpRows"></tbody>
+          </table>
+          <div class="empty hidden" id="cmpEmpty">No devices.</div>
+        </div>
+      </div>
+    </div>
+
     <!-- FIRMWARE -->
     <div class="subsec hidden" id="set-firmware">
       <div class="panel" id="fwJobPanel" style="display:none">
@@ -1005,6 +1024,7 @@ function showSubTab(sub) {
   if (sub === "notify") loadSettings();
   if (sub === "maint") loadMaintenance();
   if (sub === "firmware") loadFirmware();
+  if (sub === "compliance") loadCompliance();
 }
 
 /* ---------------- customers ---------------- */
@@ -1857,7 +1877,7 @@ async function openDevice(ref) {
         <div id="pPing"><p class="chips">…</p></div>
         <div id="pLive"><p class="chips">Loading live device data over the tunnel…</p></div>
       </div>
-      <div class="pcol"><div id="pManage"></div></div>
+      <div class="pcol"><div id="pManage"></div><div id="pCompliance"></div></div>
     </div>
     <div id="pConsole"></div>`;
 
@@ -1873,6 +1893,7 @@ async function openDevice(ref) {
   $("pTitle").textContent = r.serialNumber + (r.label ? " — " + r.label : " — " + r.identity);
   renderControls(r);
   renderManage(r, backups, devEvents);
+  renderCompliance(r);
   renderConsole(r); // once — its scrollback survives refreshManage (which only rewrites #pManage)
   pingState = { hours: 24, data: null };
   loadPings(); // stored history — works even when the tunnel is down right now
@@ -2033,8 +2054,35 @@ async function refreshManage(ref) {
   renderControls(r);
   renderOverview(r, profileState.prof || null);
   renderManage(r, backups, devEvents);
+  renderCompliance(r);
   if (isAdmin() && r.tunnelIp && r.state !== "staged" && r.state !== "revoked") loadPortMap(r.id).catch(() => {});
   api("/api/customers").then((cs) => { const dl = $("custList"); if (dl) dl.innerHTML = cs.map((c) => `<option value="${esc(c.name)}"></option>`).join(""); }).catch(() => {});
+}
+
+/* ---------------- config compliance (drift from the provisioning baseline) ---------------- */
+function renderCompliance(r) {
+  const el = $("pCompliance");
+  if (!el) return;
+  const online = r.tunnelIp && r.state !== "staged" && r.state !== "revoked";
+  if (!online) { el.innerHTML = ""; return; }
+  const c = r.compliance;
+  const admin = isAdmin();
+  const fixable = c ? c.rules.some((x) => !x.ok && x.fixable) : false;
+  const head = `<details class="collapse" open><summary>Config compliance ${c ? (c.ok ? '<span class="dot on" style="margin-left:4px"></span>' : `<span class="dot off" style="margin-left:4px"></span> ${c.failCount} issue(s)`) : ""}</summary>`;
+  let body;
+  if (!c) {
+    body = `<div class="chips">Not checked yet — compares the live config against the provisioning hardening baseline.</div>
+      <div style="margin-top:6px"><button data-act="compcheck" data-ref="${esc(r.id)}">Check now</button></div>`;
+  } else {
+    body = `<div class="translist">${c.rules.map((x) => `
+      <div><span class="dot ${x.ok ? "on" : "off"}"></span> <b>${esc(x.label)}</b> <span class="chips">${esc(x.detail)}</span></div>`).join("")}</div>
+      <div class="chips" style="margin-top:6px">checked ${esc(fmtAge((Date.now() - Date.parse(c.at)) / 1000))}</div>
+      <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+        <button data-act="compcheck" data-ref="${esc(r.id)}">Re-check</button>
+        ${admin && fixable ? `<button class="primary" data-act="compfix" data-ref="${esc(r.id)}">Fix ${c.rules.filter((x) => !x.ok && x.fixable).length} auto-fixable</button>` : ""}
+      </div>`;
+  }
+  el.innerHTML = `<div class="sub">Compliance</div>${head}${body}</details>`;
 }
 
 /* ---------------- device console (real RouterOS CLI over an SSH PTY) ---------------- */
@@ -2647,6 +2695,47 @@ async function saveTelegram() {
 /* ---------------- maintenance windows ---------------- */
 function pad2(n) { return String(n).padStart(2, "0"); }
 function toLocalInput(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+/* ---------------- config compliance (fleet view) ---------------- */
+async function loadCompliance() {
+  const list = await api("/api/compliance").catch(() => []);
+  $("cmpEmpty").classList.toggle("hidden", list.length > 0);
+  const checked = list.filter((d) => d.compliance);
+  const bad = checked.filter((d) => d.compliance && !d.compliance.ok);
+  $("cmpSummary").innerHTML = `${list.length} device(s) · ${checked.length} checked · ${bad.length ? `<b style="color:var(--red)">${bad.length} non-compliant</b>` : "all checked compliant"}`;
+  const badge = (c) => !c ? '<span class="chips">not checked</span>'
+    : c.ok ? '<span class="dot on"></span>compliant'
+    : `<span class="dot off"></span><b style="color:var(--amber)">${c.failCount} issue(s)</b>`;
+  // Non-compliant first, then unchecked, then compliant.
+  const rank = (d) => d.compliance ? (d.compliance.ok ? 2 : 0) : 1;
+  $("cmpRows").innerHTML = [...list].sort((a, b) => rank(a) - rank(b)).map((d) => {
+    const c = d.compliance;
+    const fails = c && !c.ok ? c.rules.filter((x) => !x.ok).map((x) => esc(x.label)).join(", ") : "";
+    return `<tr>
+      <td><button class="linkish" data-openref="${esc(d.id)}">${esc(d.label)}</button></td>
+      <td>${esc(d.customerGroup || "—")}</td>
+      <td>${d.online ? healthDot(d.health || "up") : '<span class="chips">offline</span>'}</td>
+      <td>${badge(c)}</td>
+      <td class="chips">${fails || (c && c.ok ? "—" : "")}</td>
+      <td class="chips">${c ? esc(fmtAge((Date.now() - Date.parse(c.at)) / 1000)) : "—"}</td>
+    </tr>`;
+  }).join("");
+}
+async function checkAllCompliance() {
+  const list = await api("/api/compliance").catch(() => []);
+  const online = list.filter((d) => d.online);
+  if (!online.length) return toast("No online devices");
+  const btn = $("cmpCheckAll");
+  btn.disabled = true;
+  let done = 0;
+  for (const d of online) {
+    btn.textContent = `Checking ${++done}/${online.length}…`;
+    await api("/api/routers/" + encodeURIComponent(d.id) + "/compliance").catch(() => {});
+    if (curTab() === "settings" && currentSub === "compliance") await loadCompliance();
+  }
+  btn.disabled = false; btn.textContent = "Check all online devices";
+  toast("Compliance sweep complete");
+}
+
 /* ---------------- firmware / RouterOS upgrades ---------------- */
 let fwState = { routers: [], sel: new Set(), pollTimer: null };
 async function loadFirmware() {
@@ -2999,6 +3088,23 @@ document.addEventListener("click", async (ev) => {
         toast("Board-firmware upgrade started — watch progress on Settings → Firmware");
       } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = "Upgrade board firmware"; }
     }
+    if (act === "compcheck") {
+      btn.disabled = true; btn.textContent = "Checking…";
+      try {
+        const c = await api("/api/routers/" + encodeURIComponent(ref) + "/compliance", { method: "GET" });
+        toast(c.ok ? "Compliant with the baseline" : `${c.failCount} compliance issue(s)`);
+        if (profileState.ref === ref && profileState.r) { profileState.r.compliance = c; renderCompliance(profileState.r); }
+      } catch (e) { toast(e.message); btn.disabled = false; btn.textContent = "Check now"; }
+    }
+    if (act === "compfix") {
+      if (!confirm(`Re-apply the provisioning baseline to ${profileState.r ? profileState.r.serialNumber : "this device"}? This changes live config (services / DNS / NTP / identity) to match policy.`)) return;
+      btn.disabled = true; btn.textContent = "Fixing…";
+      try {
+        const res = await api("/api/routers/" + encodeURIComponent(ref) + "/compliance/fix", { method: "POST" });
+        toast(res.fixed ? `Applied ${res.fixed} change(s)` : (res.note || "Nothing to fix"));
+        if (profileState.ref === ref && profileState.r) { profileState.r.compliance = res.compliance; renderCompliance(profileState.r); }
+      } catch (e) { toast(e.message); btn.disabled = false; btn.textContent = "Fix"; }
+    }
     if (act === "verify") {
       btn.disabled = true; btn.textContent = "…";
       const v = await api("/api/routers/" + encodeURIComponent(ref) + "/verify", { method: "POST" });
@@ -3131,6 +3237,7 @@ $("bulkAll").addEventListener("change", updateBulkInfo);
 $("bulkRun").addEventListener("click", runBulk);
 $("tkBtn").addEventListener("click", () => createToken().catch((e) => toast(e.message)));
 $("usBtn").addEventListener("click", addUser);
+$("cmpCheckAll").addEventListener("click", () => checkAllCompliance().catch((e) => toast(e.message)));
 $("fwCheckSel").addEventListener("click", () => fwCheckSelected().catch((e) => toast(e.message)));
 $("fwUpgradeSel").addEventListener("click", () => fwUpgrade(selectedSerials()));
 $("fwCancelBtn").addEventListener("click", (e) => { const id = e.target.dataset.job; if (id && confirm("Cancel the remaining devices? The one currently upgrading finishes.")) api("/api/upgrades/" + encodeURIComponent(id) + "/cancel", { method: "POST" }).then(() => toast("Cancelling after current device")).catch((err) => toast(err.message)); });

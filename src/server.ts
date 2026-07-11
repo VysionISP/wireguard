@@ -22,7 +22,7 @@ import { telegram as realTelegram, type TelegramClient } from "./telegram.js";
 import { interfaceRates, type Sample } from "./stream.js";
 import { TopologyStore, type GroupTopology } from "./topology.js";
 import { CustomerStore } from "./customers.js";
-import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, fetchPing, fetchNeighbors, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn, type FetchPingFn, type FetchNeighborsFn, type NeighborEntry } from "./routeros.js";
+import { fetchLiveStats, fetchInterfaces as realFetchInterfaces, fetchDeviceProfile, fetchPing, fetchNeighbors, fetchComplianceState, type FetchLiveFn, type FetchIfacesFn, type FetchProfileFn, type FetchPingFn, type FetchNeighborsFn, type FetchComplianceFn, type NeighborEntry } from "./routeros.js";
 import { discoverLinks } from "./discovery.js";
 import { MetricsStore, computeTraffic } from "./metrics.js";
 import { PingMetricsStore } from "./pingmetrics.js";
@@ -33,6 +33,7 @@ import { computeSla, type Span } from "./sla.js";
 import { sshRun as realSshRun, sftpPut as realSftpPut, type SshRunFn, type SftpPutFn, type SshShellFn } from "./ssh.js";
 import { ConsoleManager } from "./console.js";
 import { UpgradeManager, updateAvailable } from "./upgrade.js";
+import { evaluateCompliance, remediationCommands, type ComplianceBaseline } from "./compliance.js";
 import { rebootRouter, type RebootFn } from "./routeros.js";
 import { defaultMonitoring, effectivePorts, upstreamTargets, DEFAULT_UPSTREAM_TARGETS, MAX_UPSTREAM_TARGETS, type RouterRecord, type DeviceType } from "./types.js";
 
@@ -45,6 +46,7 @@ export interface AppDeps {
   fetchLive?: FetchLiveFn;
   fetchIfaces?: FetchIfacesFn;
   fetchProfile?: FetchProfileFn;
+  fetchCompliance?: FetchComplianceFn;
   fetchPing?: FetchPingFn;
   fetchNeighbors?: FetchNeighborsFn;
   metrics?: MetricsStore;
@@ -141,6 +143,14 @@ export function buildApp(deps: AppDeps): Express {
   const fetchLive = deps.fetchLive ?? fetchLiveStats;
   const fetchIfaces = deps.fetchIfaces ?? realFetchInterfaces;
   const fetchProfile = deps.fetchProfile ?? fetchDeviceProfile;
+  const fetchCompliance = deps.fetchCompliance ?? fetchComplianceState;
+  const complianceBaseline = (): ComplianceBaseline => ({
+    disableServices: config.hardening.disableServices,
+    dns: config.hardening.dns,
+    ntpServers: config.hardening.ntpServers,
+    identityPrefix: config.hardening.identityPrefix,
+    mgmtFirewallComment: "managed: wg-provision allow mgmt",
+  });
   const fetchPingFn = deps.fetchPing ?? fetchPing;
   const fetchNeighborsFn = deps.fetchNeighbors ?? fetchNeighbors;
   const metrics =
@@ -1906,6 +1916,60 @@ export function buildApp(deps: AppDeps): Express {
       res.json({ ok: out.ok, output: out.output });
     } catch (err) {
       res.status(502).json({ error: `command failed: ${(err as Error).message}` });
+    }
+  });
+
+  // ---- config compliance: drift from the provisioning hardening baseline --
+  app.get("/api/routers/:ref/compliance", requireTech, async (req: Request, res: Response) => {
+    const router = onlineRouter(req.params.ref, res);
+    if (!router) return;
+    try {
+      const state = await fetchCompliance(router.tunnelIp, router.username, router.password);
+      const result = evaluateCompliance(state, complianceBaseline(), new Date().toISOString());
+      router.compliance = result;
+      store.saveExisting(router);
+      res.json(result);
+    } catch (err) {
+      res.status(502).json({ error: `compliance check failed: ${(err as Error).message}` });
+    }
+  });
+
+  // Fleet roll-up from the last cached check on each device (cheap; no tunnel hit).
+  app.get("/api/compliance", requireTech, (_req: Request, res: Response) => {
+    const devices = store
+      .list()
+      .filter((r) => r.state !== "staged")
+      .map((r) => ({
+        id: r.id, serialNumber: r.serialNumber, label: r.label || r.identity || r.serialNumber,
+        customerGroup: r.customerGroup ?? "", health: r.health, deviceType: r.deviceType ?? "customer",
+        online: Boolean(r.tunnelIp) && r.state !== "revoked",
+        compliance: r.compliance ?? null,
+      }));
+    res.json(devices);
+  });
+
+  app.post("/api/routers/:ref/compliance/fix", requireAdmin, async (req: Request, res: Response) => {
+    const router = onlineRouter(req.params.ref, res);
+    if (!router) return;
+    try {
+      const baseline = complianceBaseline();
+      const before = evaluateCompliance(await fetchCompliance(router.tunnelIp, router.username, router.password), baseline, new Date().toISOString());
+      const cmds = remediationCommands(before, baseline, router.serialNumber);
+      if (!cmds.length) {
+        router.compliance = before;
+        store.saveExisting(router);
+        res.json({ fixed: 0, compliance: before, note: "nothing auto-fixable was out of compliance" });
+        return;
+      }
+      for (const cmd of cmds) await sshRun(router.tunnelIp, router.username, router.password, cmd);
+      const after = evaluateCompliance(await fetchCompliance(router.tunnelIp, router.username, router.password), baseline, new Date().toISOString());
+      router.compliance = after;
+      store.saveExisting(router);
+      audit.log(who(req), "compliance-fix", router.serialNumber, `${cmds.length} command(s)`);
+      events.add({ at: new Date().toISOString(), serialNumber: router.serialNumber, label: router.label || router.identity || router.serialNumber, type: "monitor-error", severity: "info", message: `Compliance remediation applied (${cmds.length} change(s)) by ${who(req)}` });
+      res.json({ fixed: cmds.length, compliance: after });
+    } catch (err) {
+      res.status(502).json({ error: `remediation failed: ${(err as Error).message}` });
     }
   });
 

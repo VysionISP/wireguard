@@ -505,3 +505,60 @@ export async function fetchDeviceProfile(
     })),
   };
 }
+
+/** The security-relevant config we compare against the provisioning baseline. */
+export interface ComplianceState {
+  identity: string;
+  services: Array<{ name: string; disabled: boolean }>;
+  dnsServers: string[];
+  ntpEnabled: boolean;
+  ntpServers: string[];
+  firewallComments: string[];
+}
+
+export type FetchComplianceFn = typeof fetchComplianceState;
+
+/** Read the RouterOS config a compliance check inspects (best-effort per query). */
+export async function fetchComplianceState(
+  tunnelIp: string,
+  username: string,
+  password: string,
+  timeoutMs = 8000,
+): Promise<ComplianceState> {
+  const auth = Buffer.from(`${username}:${password}`).toString("base64");
+  const base = `http://${tunnelIp}/rest`;
+  const get = async (path: string): Promise<unknown> => {
+    const res = await fetch(`${base}${path}`, { headers: { authorization: `Basic ${auth}` }, signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) throw new Error(`${path}: ${res.status}`);
+    return res.json();
+  };
+  const arr = (v: unknown): Array<Record<string, string>> => (Array.isArray(v) ? v : []);
+  const obj = (v: unknown): Record<string, string> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, string>) : {});
+  const val = <T>(r: PromiseSettledResult<unknown>, f: (v: unknown) => T, fallback: T): T => (r.status === "fulfilled" ? f(r.value) : fallback);
+
+  const [identR, svcR, dnsR, ntpR, ntpSrvR, fwR] = await Promise.allSettled([
+    get("/system/identity"),
+    get("/ip/service"),
+    get("/ip/dns"),
+    get("/system/ntp/client"),
+    get("/system/ntp/client/servers"),
+    get("/ip/firewall/filter"),
+  ]);
+
+  const dns = val(dnsR, obj, {});
+  const ntp = val(ntpR, obj, {});
+  // DNS servers come as a comma-joined string on /ip/dns.
+  const dnsServers = (dns.servers ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  // NTP servers: newer ROS keeps them in a sub-menu; older stuffs them on the client.
+  const ntpServers = val(ntpSrvR, arr, []).map((s) => s.address ?? s.value ?? "").filter(Boolean);
+  const legacyNtp = [ntp["primary-ntp"], ntp["secondary-ntp"], ntp.servers].filter(Boolean).flatMap((s) => String(s).split(",")).map((s) => s.trim()).filter(Boolean);
+
+  return {
+    identity: val(identR, obj, {}).name ?? "unknown",
+    services: val(svcR, arr, []).map((s) => ({ name: s.name ?? "?", disabled: s.disabled === "true" })),
+    dnsServers,
+    ntpEnabled: (ntp.enabled ?? "") === "true" || ntpServers.length > 0 || legacyNtp.length > 0,
+    ntpServers: ntpServers.length ? ntpServers : legacyNtp,
+    firewallComments: val(fwR, arr, []).map((f) => f.comment ?? "").filter(Boolean),
+  };
+}

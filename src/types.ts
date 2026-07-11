@@ -60,6 +60,26 @@ export interface RouterRecord {
   monState?: DeviceMonState;
   /** Last RouterOS update check ran from the dashboard. */
   updateCheck?: { at: string; channel: string; installed: string; latest: string; status: string };
+  /** Last config-compliance check result (drift from the provisioning baseline). */
+  compliance?: ComplianceResult;
+}
+
+/** One compliance rule's verdict against the provisioning baseline. */
+export interface ComplianceRule {
+  key: string;
+  label: string;
+  ok: boolean;
+  /** Human-readable "what we found vs expected". */
+  detail: string;
+  /** Whether a one-click fix can bring this rule back into line. */
+  fixable: boolean;
+}
+
+export interface ComplianceResult {
+  at: string;
+  ok: boolean;
+  failCount: number;
+  rules: ComplianceRule[];
 }
 
 /** Per-port monitoring rule. A device watches zero or more of these. */

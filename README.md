@@ -311,6 +311,33 @@ look at — the rollout continues past it. Only one rollout runs at a time; job
 history is kept under `upgradesPath`. Timeouts/poll cadence aren't hand-tuned
 in config (sensible defaults: ~12 min online-wait, 10 s poll).
 
+## Config compliance
+
+**Settings → Compliance** (and a panel on each device page) checks whether a
+device still matches the **provisioning hardening baseline** — the same policy
+(`config.hardening`) the bootstrap script applied. Drift is normal in the
+field: someone re-enables telnet, a factory reset wipes DNS, an identity never
+got set. Each rule is only enforced if the baseline specifies it:
+
+- **Insecure services disabled** — `hardening.disableServices` (telnet/ftp/…)
+  must stay disabled.
+- **DNS servers** — the device must carry `hardening.dns`.
+- **NTP time sync** — client enabled with `hardening.ntpServers`.
+- **Device identity set** — non-factory, matching `hardening.identityPrefix`.
+- **Management firewall rule** — the managed tunnel-access rule is present.
+
+The fleet view lists every device compliant / non-compliant / not-checked
+(non-compliant first) with the failing rules named; **Check all online
+devices** sweeps them. On a device page the same check runs live, and admins
+get a one-click **Fix** that re-applies the fixable rules over SSH (services,
+DNS, NTP, and naming a still-factory identity) and re-checks. It deliberately
+won't rename a *deliberately-set* identity or re-add the firewall rule
+unattended — those are surfaced for a human. Every fix is audit-logged.
+
+`GET /api/routers/:ref/compliance` runs a live check (tech), `GET
+/api/compliance` is the cached fleet roll-up (tech), `POST
+/api/routers/:ref/compliance/fix` remediates (admin).
+
 ## Status board & device monitoring
 
 The dashboard opens on a **Status board**: a live banner (green "all nominal"
