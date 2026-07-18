@@ -357,7 +357,13 @@ customer's devices and nothing else. The portal shows, per device:
 - connected equipment the router ping-monitors (by name, never the LAN IP),
 - a **traffic graph** with a previous-period comparison, per interface / range.
 
-It refreshes every 30 s and carries a planned-maintenance banner. Crucially it
+It's built for **non-technical customers**: a clean, light, plain-language page
+(no networking jargon) with a friendly overall-status hero ("Everything's
+working" / "Your service is offline — our team is on it"), simple
+Online/Unstable/Offline pills, uptime shown against their guarantee, data
+shown as plain "Data used" totals with a per-day usage chart (not interface
+throughput), and a "Need a hand?" support card with your contact details. It
+refreshes every 30 s and carries a planned-maintenance banner. Crucially it
 is enforced server-side: the role hierarchy (admin > tech > customer) keeps a
 customer token off every staff endpoint (the fleet, credentials, config,
 upgrades, console…), and the portal's own endpoints resolve the device set from
