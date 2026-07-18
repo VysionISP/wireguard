@@ -661,6 +661,7 @@ require the admin role.
 | `GET /api/routers/:ref/traffic?hours=` | tech | Traffic history + previous-period comparison from stored metrics |
 | `GET /api/routers/:ref/pings?hours=` | tech | Upstream ping latency/loss series per target (8.8.8.8, 1.1.1.1, custom) |
 | `GET /api/reports/sla?from&to` | tech | Uptime/SLA per device, customer and fleet (maintenance-excluded) |
+| `POST /api/routers/:ref/sla-reset` | admin | Re-base a device's SLA clock to now (`{undo:true}` restores full history) |
 | `POST /api/groups/:name/discover` | admin | Auto-discover map links from MikroTik neighbor tables |
 | `POST/DELETE /api/customers/:name/status-token` | admin | Enable/rotate / disable a customer's public status page |
 | `GET /status/:token` + `/api/status/:token` | public (token) | Read-only customer status page + its JSON |

@@ -62,6 +62,12 @@ export interface RouterRecord {
   updateCheck?: { at: string; channel: string; installed: string; latest: string; status: string };
   /** Last config-compliance check result (drift from the provisioning baseline). */
   compliance?: ComplianceResult;
+  /**
+   * When set, SLA/uptime is measured from this instant instead of createdAt —
+   * an operator "reset" after e.g. a site rebuild or a disputed period. Past
+   * outages before this point stop counting against the device.
+   */
+  slaResetAt?: string;
 }
 
 /** One compliance rule's verdict against the provisioning baseline. */
@@ -80,6 +86,13 @@ export interface ComplianceResult {
   ok: boolean;
   failCount: number;
   rules: ComplianceRule[];
+}
+
+/** The instant SLA measurement starts for a device (createdAt unless reset later). */
+export function slaBaseline(r: { createdAt: string; slaResetAt?: string }): number {
+  const created = Date.parse(r.createdAt);
+  const reset = r.slaResetAt ? Date.parse(r.slaResetAt) : NaN;
+  return Number.isFinite(reset) ? Math.max(created, reset) : created;
 }
 
 /** Per-port monitoring rule. A device watches zero or more of these. */

@@ -94,4 +94,43 @@ describe("GET /api/reports/sla", () => {
     expect(dev.meetsTarget).toBe(false);
     expect(res.body.fleet.breaching).toBeGreaterThanOrEqual(1);
   });
+
+  it("per-device SLA reset re-bases uptime so past outages stop counting", async () => {
+    await register("HEX4", 4);
+    const r = store.findBySerial("HEX4")!;
+    r.createdAt = new Date(Date.now() - 100 * H).toISOString();
+    store.save(r);
+    // A 5h outage 50h ago — a big dent over a 100h window.
+    outages.open("HEX4", "HEX4", new Date(Date.now() - 50 * H).toISOString());
+    outages.close("HEX4", new Date(Date.now() - 45 * H).toISOString());
+
+    const from = Date.now() - 100 * H;
+    const before = await request(app).get(`/api/reports/sla?from=${from}&to=${Date.now()}`).set("authorization", A());
+    const dBefore = before.body.devices.find((d: any) => d.serialNumber === "HEX4");
+    expect(dBefore.uptimePct).toBeLessThan(96);
+    expect(dBefore.slaResetAt).toBeNull();
+
+    // Reset: baseline moves to now, so the old outage is before the window start.
+    const reset = await request(app).post("/api/routers/HEX4/sla-reset").set("authorization", A());
+    expect(reset.status).toBe(200);
+    expect(reset.body.slaResetAt).toBeTruthy();
+
+    const after = await request(app).get(`/api/reports/sla?from=${from}&to=${Date.now()}`).set("authorization", A());
+    const dAfter = after.body.devices.find((d: any) => d.serialNumber === "HEX4");
+    expect(dAfter.uptimePct).toBe(100); // clean slate — the pre-reset outage no longer counts
+    expect(dAfter.downMs).toBe(0);
+    expect(dAfter.slaResetAt).toBeTruthy();
+
+    // Undo restores the full history.
+    const undo = await request(app).post("/api/routers/HEX4/sla-reset").set("authorization", A()).send({ undo: true });
+    expect(undo.body.slaResetAt).toBeNull();
+    const restored = await request(app).get(`/api/reports/sla?from=${from}&to=${Date.now()}`).set("authorization", A());
+    expect(restored.body.devices.find((d: any) => d.serialNumber === "HEX4").uptimePct).toBeLessThan(96);
+  });
+
+  it("SLA reset is admin-only", async () => {
+    await register("HEX5", 5);
+    expect((await request(app).post("/api/routers/HEX5/sla-reset")).status).toBe(401);
+    expect((await request(app).post("/api/routers/NOPE/sla-reset").set("authorization", A())).status).toBe(404);
+  });
 });

@@ -35,7 +35,7 @@ import { ConsoleManager } from "./console.js";
 import { UpgradeManager, updateAvailable } from "./upgrade.js";
 import { evaluateCompliance, remediationCommands, type ComplianceBaseline } from "./compliance.js";
 import { rebootRouter, type RebootFn } from "./routeros.js";
-import { defaultMonitoring, effectivePorts, upstreamTargets, DEFAULT_UPSTREAM_TARGETS, MAX_UPSTREAM_TARGETS, type RouterRecord, type DeviceType } from "./types.js";
+import { defaultMonitoring, effectivePorts, upstreamTargets, slaBaseline, DEFAULT_UPSTREAM_TARGETS, MAX_UPSTREAM_TARGETS, type RouterRecord, type DeviceType } from "./types.js";
 
 export interface AppDeps {
   config: Config;
@@ -1244,7 +1244,7 @@ export function buildApp(deps: AppDeps): Express {
           .windowsCovering(r.serialNumber, r.customerGroup, "offline")
           .map((w) => ({ start: Date.parse(w.startsAt), end: Date.parse(w.endsAt) }));
         const sla = computeSla({
-          createdAt: Date.parse(r.createdAt),
+          createdAt: slaBaseline(r),
           from,
           to,
           outages: outByserial.get(r.serialNumber) ?? [],
@@ -1253,8 +1253,10 @@ export function buildApp(deps: AppDeps): Express {
         const target = r.slaTarget && r.slaTarget > 0 ? r.slaTarget : null;
         return {
           serialNumber: r.serialNumber,
+          id: r.id,
           label: r.label || r.identity || r.serialNumber,
           customerGroup: r.customerGroup ?? null,
+          slaResetAt: r.slaResetAt ?? null,
           uptimePct: sla.uptimePct,
           downMs: sla.downMs,
           excludedMs: sla.excludedMs,
@@ -1666,7 +1668,7 @@ export function buildApp(deps: AppDeps): Express {
       const maint = maintenance
         .windowsCovering(r.serialNumber, r.customerGroup, "offline")
         .map((w) => ({ start: Date.parse(w.startsAt), end: Date.parse(w.endsAt) }));
-      const sla = computeSla({ createdAt: Date.parse(r.createdAt), from, to: now, outages: outByserial.get(r.serialNumber) ?? [], maintenance: maint });
+      const sla = computeSla({ createdAt: slaBaseline(r), from, to: now, outages: outByserial.get(r.serialNumber) ?? [], maintenance: maint });
       down += sla.downMs;
       eff += sla.effectiveMs;
       const state =
@@ -1754,7 +1756,7 @@ export function buildApp(deps: AppDeps): Express {
     const hostState = (st: string | undefined): string => (st === "up" ? "up" : st === "warning" ? "degraded" : st === "offline" ? "down" : "unknown");
     const devices = routers.map((r) => {
       const maint = maintenance.windowsCovering(r.serialNumber, r.customerGroup, "offline").map((w) => ({ start: Date.parse(w.startsAt), end: Date.parse(w.endsAt) }));
-      const sla = computeSla({ createdAt: Date.parse(r.createdAt), from, to: now, outages: outByserial.get(r.serialNumber) ?? [], maintenance: maint });
+      const sla = computeSla({ createdAt: slaBaseline(r), from, to: now, outages: outByserial.get(r.serialNumber) ?? [], maintenance: maint });
       const state = r.health === "warning" ? "degraded" : (r.health ? r.health !== "offline" : r.lastOnline !== false) ? "up" : "down";
       const target = r.slaTarget && r.slaTarget > 0 ? r.slaTarget : null;
       return {
@@ -2020,6 +2022,31 @@ export function buildApp(deps: AppDeps): Express {
     } catch (err) {
       res.status(502).json({ error: `command failed: ${(err as Error).message}` });
     }
+  });
+
+  // ---- SLA reset: start a device's uptime measurement over from now --------
+  app.post("/api/routers/:ref/sla-reset", requireAdmin, (req: Request, res: Response) => {
+    const router = store.find(req.params.ref);
+    if (!router) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    const undo = Boolean((req.body ?? {}).undo);
+    if (undo) {
+      delete router.slaResetAt;
+    } else {
+      router.slaResetAt = new Date().toISOString();
+    }
+    router.updatedAt = new Date().toISOString();
+    store.save(router);
+    audit.log(who(req), "sla-reset", router.serialNumber, undo ? "reset cleared (full history restored)" : `baseline moved to ${router.slaResetAt}`);
+    events.add({
+      at: new Date().toISOString(), serialNumber: router.serialNumber,
+      label: router.label || router.identity || router.serialNumber,
+      type: "monitor-error", severity: "info",
+      message: undo ? `SLA reset cleared by ${who(req)} — full outage history counts again` : `SLA baseline reset by ${who(req)} — uptime now measured from this point`,
+    });
+    res.json({ ok: true, slaResetAt: router.slaResetAt ?? null });
   });
 
   // ---- config compliance: drift from the provisioning hardening baseline --

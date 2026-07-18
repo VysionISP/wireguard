@@ -852,7 +852,7 @@
     <div class="panel" id="slaDevPanel" style="display:none">
       <h2>By device</h2>
       <div class="tablewrap"><table>
-        <thead><tr><th>Device</th><th>Customer</th><th>Uptime</th><th>Target</th><th>Status</th><th>Downtime</th><th>Outages</th><th>Longest</th><th>Planned</th></tr></thead>
+        <thead><tr><th>Device</th><th>Customer</th><th>Uptime</th><th>Target</th><th>Status</th><th>Downtime</th><th>Outages</th><th>Longest</th><th>Planned</th><th></th></tr></thead>
         <tbody id="slaDevRows"></tbody>
       </table></div>
     </div>
@@ -1991,6 +1991,7 @@ function renderManage(r, backups, devEvents) {
       <select id="mSla" style="width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:6px 10px;font:inherit;font-size:13px;margin:4px 0 10px">
         ${[["0", "None"], ["99", "99% (standard)"], ["99.5", "99.5%"], ["99.9", "99.9% (three nines)"], ["99.95", "99.95%"], ["99.99", "99.99% (four nines)"]].map(([v, l]) => `<option value="${v}" ${String(r.slaTarget || 0) === v ? "selected" : ""}>${l}</option>`).join("")}
       </select>
+      ${isAdmin() ? `<div class="row2" style="margin:0 0 10px"><button data-slareset="${esc(r.id)}" data-serial="${esc(r.serialNumber)}" title="Start this device's uptime measurement over from now">Reset SLA clock</button>${r.slaResetAt ? `<button data-slaunreset="${esc(r.id)}" data-serial="${esc(r.serialNumber)}">Undo reset</button><span class="chips">measuring since ${esc(new Date(r.slaResetAt).toLocaleDateString())}</span>` : `<span class="chips">measuring since ${esc(new Date(r.createdAt).toLocaleDateString())}</span>`}</div>` : ""}
       <label for="mNotes">Notes</label>
       <textarea id="mNotes" placeholder="anything worth remembering about this install">${esc(r.notes || "")}</textarea>
       <button class="primary" data-act="savemeta" data-ref="${esc(r.id)}">Save details</button>
@@ -2926,6 +2927,11 @@ function initReports() {
   }
   if (!window._sla) runSla();
 }
+// Refresh whichever view the reset was triggered from (device page or report).
+function afterSlaReset(ref) {
+  if (profileState.ref === ref && !$("tab-device").classList.contains("hidden")) refreshManage(ref);
+  if (curTab() === "reports" && window._sla) runSla();
+}
 async function runSla() {
   const from = $("slaFrom").value ? new Date($("slaFrom").value + "T00:00:00").getTime() : Date.now() - 30 * 86400000;
   const to = $("slaTo").value ? new Date($("slaTo").value + "T23:59:59").getTime() : Date.now();
@@ -2954,13 +2960,15 @@ async function runSla() {
     const status = d.meetsTarget === null ? '<span style="color:var(--muted)">—</span>'
       : d.meetsTarget ? '<span class="pill verified">✓ met</span>'
       : '<span class="pill revoked">✗ breached</span>';
+    const since = d.slaResetAt ? `<div class="chips" title="SLA measured from here">since ${esc(new Date(d.slaResetAt).toLocaleDateString())}</div>` : "";
     return `<tr>
-    <td>${esc(d.label)}</td><td>${d.customerGroup ? esc(d.customerGroup) : '<span style="color:var(--muted)">—</span>'}</td>
+    <td>${esc(d.label)}${since}</td><td>${d.customerGroup ? esc(d.customerGroup) : '<span style="color:var(--muted)">—</span>'}</td>
     <td><span class="pill ${slaClass(d.uptimePct)}">${d.uptimePct.toFixed(3)}%</span></td>
     <td>${d.slaTarget != null ? d.slaTarget + "%" : '<span style="color:var(--muted)">—</span>'}</td>
     <td>${status}</td>
     <td>${fmtDur(d.downMs)}</td><td>${d.outages}</td><td>${fmtDur(d.longestMs)}</td>
-    <td>${d.excludedMs ? fmtDur(d.excludedMs) : "—"}</td></tr>`;
+    <td>${d.excludedMs ? fmtDur(d.excludedMs) : "—"}</td>
+    <td class="actions">${isAdmin() ? `<button data-slareset="${esc(d.id)}" data-serial="${esc(d.serialNumber)}" title="Start this device's uptime measurement over from now">Reset</button>${d.slaResetAt ? ` <button data-slaunreset="${esc(d.id)}" data-serial="${esc(d.serialNumber)}" title="Restore full outage history">Undo</button>` : ""}` : ""}</td></tr>`;
   }).join("");
 }
 function slaCsv() {
@@ -3008,6 +3016,8 @@ document.addEventListener("click", async (ev) => {
   const d = btn.dataset;
   if (d.copy != null) return copy(d.copy);
   if (d.slaquick != null) { const to = new Date(), from = new Date(Date.now() - Number(d.slaquick) * 86400000); $("slaTo").value = to.toISOString().slice(0, 10); $("slaFrom").value = from.toISOString().slice(0, 10); return runSla(); }
+  if (d.slareset != null) { if (confirm(`Reset the SLA/uptime clock for ${d.serial}? Outages before now stop counting — its uptime starts fresh from today. (The outage log is kept; you can Undo.)`)) { try { await api("/api/routers/" + encodeURIComponent(d.slareset) + "/sla-reset", { method: "POST" }); toast("SLA reset for " + d.serial); afterSlaReset(d.slareset); } catch (e) { toast(e.message); } } return; }
+  if (d.slaunreset != null) { if (confirm(`Undo the SLA reset for ${d.serial}? Its full outage history counts again.`)) { try { await api("/api/routers/" + encodeURIComponent(d.slaunreset) + "/sla-reset", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ undo: true }) }); toast("SLA reset undone for " + d.serial); afterSlaReset(d.slaunreset); } catch (e) { toast(e.message); } } return; }
   if (d.mwquick != null) { const now = new Date(); $("mwStart").value = toLocalInput(now); $("mwEnd").value = toLocalInput(new Date(now.getTime() + Number(d.mwquick) * 60000)); return; }
   if (d.mwdel != null) { if (confirm("Delete this maintenance window?")) { await api("/api/maintenance/" + encodeURIComponent(d.mwdel), { method: "DELETE" }).catch((e) => toast(e.message)); loadMaintenance(); } return; }
   if (d.hostadd != null) return addMonitoredHost(d.hostadd, d.hostname, d.hostmac);
