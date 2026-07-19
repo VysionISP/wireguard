@@ -155,11 +155,6 @@ The dashboard supports named accounts with three roles:
 - **customer** — a read-only **customer portal** (see below), scoped to a single
   customer group; no access to the ops dashboard or any staff API
 
-The dashboard supports named accounts with two roles:
-
-- **tech** — view the fleet, verify routers, see live stats, view/download backups
-- **admin** — everything, plus revoke, bulk commands, tokens, users, restore staging
-
 Manage users entirely from the **Users** tab — add users (with a chosen or
 generated password), reset any user's password (ends their sessions), and
 remove them. Each person can change their own password from the **My account**
