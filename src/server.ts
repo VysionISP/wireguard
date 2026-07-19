@@ -825,12 +825,31 @@ export function buildApp(deps: AppDeps): Express {
   });
 
   app.delete("/api/users/:username", requireAdmin, (req: Request, res: Response) => {
-    if (!users.remove(req.params.username)) {
+    const target = req.params.username;
+    const all = users.list();
+    const user = all.find((u) => u.username === target);
+    if (!user) {
       res.status(404).json({ error: "not found" });
       return;
     }
-    sessions.destroyForUser(req.params.username);
-    audit.log(who(req), "user.remove", req.params.username);
+    // Don't let an admin delete the account they're currently signed in with —
+    // it's almost always a mistake and drops them mid-session.
+    if (target === who(req)) {
+      res.status(400).json({ error: "you can't delete the account you're signed in with" });
+      return;
+    }
+    // Never remove the last real admin, or there's no way back into the
+    // dashboard except the break-glass admin token.
+    if (user.role === "admin" && all.filter((u) => u.role === "admin").length <= 1) {
+      res.status(400).json({ error: "can't remove the last admin account — make another admin first" });
+      return;
+    }
+    if (!users.remove(target)) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    sessions.destroyForUser(target);
+    audit.log(who(req), "user.remove", target);
     res.json({ ok: true });
   });
 

@@ -2552,14 +2552,20 @@ async function loadUsers() {
   const [list, custs] = await Promise.all([api("/api/users"), api("/api/customers").catch(() => [])]);
   $("userEmpty").classList.toggle("hidden", list.length > 0);
   const dl = $("usCustList"); if (dl) dl.innerHTML = custs.map((c) => `<option value="${esc(c.name)}"></option>`).join("");
-  $("userRows").innerHTML = list.map((u) => `<tr>
-    <td>${esc(u.username)}</td><td><span class="role">${esc(u.role)}</span>${u.customerGroup ? ` <span class="chips">${esc(u.customerGroup)}</span>` : ""}</td>
+  const adminCount = list.filter((u) => u.role === "admin").length;
+  $("userRows").innerHTML = list.map((u) => {
+    const isSelf = me && u.username === me.username;
+    const lastAdmin = u.role === "admin" && adminCount <= 1;
+    const why = isSelf ? "You can't remove the account you're signed in with" : lastAdmin ? "Can't remove the last admin — create another admin first" : "";
+    return `<tr>
+    <td>${esc(u.username)}${isSelf ? ' <span class="chips">you</span>' : ""}</td><td><span class="role">${esc(u.role)}</span>${u.customerGroup ? ` <span class="chips">${esc(u.customerGroup)}</span>` : ""}</td>
     <td>${fmtDate(u.createdAt)}</td>
     <td class="actions">
       <button data-usreset="${esc(u.username)}">Reset password</button>
-      <button class="danger" data-usdel="${esc(u.username)}">Remove</button>
+      <button class="danger" data-usdel="${esc(u.username)}" ${why ? `disabled title="${esc(why)}"` : ""}>Remove</button>
     </td>
-  </tr>`).join("");
+  </tr>`;
+  }).join("");
 }
 async function addUser() {
   const username = $("usName").value.trim();

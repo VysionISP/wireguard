@@ -314,6 +314,51 @@ describe("password management", () => {
   });
 });
 
+describe("delete user", () => {
+  it("admin removes a user and ends their sessions", async () => {
+    users.add("ivan", "ivanpass1", "tech");
+    const login = await request(app).post("/api/login").send({ username: "ivan", password: "ivanpass1" });
+    const ivanAuth = `Bearer ${login.body.session}`;
+    expect((await req("get", "/api/me", ivanAuth)).status).toBe(200);
+    const del = await req("delete", "/api/users/ivan");
+    expect(del.status).toBe(200);
+    // session killed + can't log in again
+    expect((await req("get", "/api/me", ivanAuth)).status).toBe(401);
+    expect((await request(app).post("/api/login").send({ username: "ivan", password: "ivanpass1" })).status).toBe(401);
+    expect((await req("delete", "/api/users/ivan")).status).toBe(404); // gone
+  });
+
+  it("won't delete the last admin, but will once another admin exists", async () => {
+    users.add("boss", "bosspass1", "admin");
+    // Only one real admin account → blocked (the break-glass token isn't an account).
+    const first = await req("delete", "/api/users/boss");
+    expect(first.status).toBe(400);
+    expect(first.body.error).toMatch(/last admin/);
+    // Add a second admin, now the first can go.
+    users.add("boss2", "bosspass2", "admin");
+    expect((await req("delete", "/api/users/boss")).status).toBe(200);
+  });
+
+  it("won't delete the account you're signed in with", async () => {
+    users.add("selfadmin", "selfpass1", "admin");
+    users.add("other", "otherpass1", "admin"); // so it's not the last-admin rule doing the blocking
+    const login = await request(app).post("/api/login").send({ username: "selfadmin", password: "selfpass1" });
+    const selfAuth = `Bearer ${login.body.session}`;
+    const del = await req("delete", "/api/users/selfadmin", selfAuth);
+    expect(del.status).toBe(400);
+    expect(del.body.error).toMatch(/signed in with/);
+    // deleting a different account from that session is fine
+    expect((await req("delete", "/api/users/other", selfAuth)).status).toBe(200);
+  });
+
+  it("delete is admin-only", async () => {
+    users.add("tuser", "techpass1", "tech");
+    users.add("victim", "victimpass1", "tech");
+    const login = await request(app).post("/api/login").send({ username: "tuser", password: "techpass1" });
+    expect((await req("delete", "/api/users/victim", `Bearer ${login.body.session}`)).status).toBe(403);
+  });
+});
+
 describe("remove router (two-step delete)", () => {
   it("refuses to remove a router that isn't revoked, then removes it after revoke", async () => {
     await register("DEL1", 1);
