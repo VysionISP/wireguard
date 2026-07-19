@@ -37,6 +37,33 @@ provisioning server.
 Everything created on the router carries a `managed: wg-provision` comment, so
 re-provisioning is idempotent and never touches config added by hand.
 
+## Tunnel MTU (large transfers stalling)
+
+WireGuard adds ~60-80 bytes of overhead per packet, so a full 1500-byte packet
+won't fit the tunnel. If the interface MTU is left too high for the underlying
+path (PPPoE 1492, LTE, double-NAT) the oversized packets are silently dropped:
+**pings and small requests work, but TLS handshakes, `git`, `/tool fetch`, and
+large REST/SSH output over the tunnel hang.** Provisioning handles this
+automatically — each router's `wg-mgmt` interface is set to `wireguard.mtu`
+(default 1420; drop to 1412/1400 on constrained links) and, when
+`wireguard.clampMss` is on (default), a `clamp-to-pmtu` TCP MSS rule is added
+for traffic traversing the tunnel. Both carry the `managed: wg-provision`
+comment, so re-running provisioning is idempotent.
+
+Already-deployed routers won't have run the new script — apply it to one from
+its **Console** (or Bulk actions across the fleet):
+
+```
+/interface/wireguard/set [find name="wg-mgmt"] mtu=1420
+/ip/firewall/mangle/add chain=forward action=change-mss new-mss=clamp-to-pmtu \
+    passthrough=yes protocol=tcp tcp-flags=syn out-interface="wg-mgmt" \
+    comment="managed: wg-provision mss clamp"
+```
+
+(This covers traffic over the *management* tunnel. A server reaching the
+internet *through* a router's WAN that also drops large packets needs the same
+MSS clamp on that WAN interface — substitute your WAN for `out-interface`.)
+
 ## Requirements
 
 - **Routers**: RouterOS v7 (WireGuard support), internet access at bootstrap time.

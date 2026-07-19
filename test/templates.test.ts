@@ -54,6 +54,23 @@ describe("provision script", () => {
     expect(renderProvision(noKeepalive, router)).not.toContain("persistent-keepalive");
   });
 
+  it("sets the tunnel MTU and an MSS clamp so large transfers don't stall", () => {
+    const rsc = renderProvision(cfg, router);
+    expect(rsc).toContain('/interface/wireguard/set [find name="wg-mgmt"] mtu=1420');
+    expect(rsc).toContain('action=change-mss new-mss=clamp-to-pmtu');
+    expect(rsc).toContain('out-interface="wg-mgmt"');
+    expect(rsc).toContain('comment="managed: wg-provision mss clamp"');
+  });
+
+  it("honours a custom MTU and lets the MSS clamp be turned off", () => {
+    const c = testConfig();
+    c.wireguard.mtu = 1400;
+    c.wireguard.clampMss = false;
+    const rsc = renderProvision(c, router);
+    expect(rsc).toContain('mtu=1400');
+    expect(rsc).not.toContain("change-mss");
+  });
+
   it("escapes RouterOS string metacharacters in interpolated values", () => {
     const nasty = { ...router, password: 'p"w$va\\lue' };
     const rsc = renderProvision(cfg, nasty);

@@ -110,6 +110,19 @@ export function renderProvision(cfg: Config, router: RouterRecord, tokenOverride
 /ip/address/remove [find interface="${wg}" comment="managed: wg-provision"]
 /ip/address/add address=${router.tunnelIp}/${mgmt.prefix} interface="${wg}" comment="managed: wg-provision"
 
+# 2b. Tunnel MTU + TCP MSS clamp. WireGuard's per-packet overhead means a full
+#     1500-byte packet won't fit, so without this large transfers over the
+#     tunnel (TLS, git, /tool fetch, big REST/SSH output) stall while pings
+#     still work. Set the interface MTU and clamp MSS to the path MTU.
+/interface/wireguard/set [find name="${wg}"] mtu=${cfg.wireguard.mtu}${
+  cfg.wireguard.clampMss
+    ? `
+:if ([:len [/ip/firewall/mangle/find comment="managed: wg-provision mss clamp"]] = 0) do={
+    /ip/firewall/mangle/add chain=forward action=change-mss new-mss=clamp-to-pmtu passthrough=yes protocol=tcp tcp-flags=syn out-interface="${wg}" comment="managed: wg-provision mss clamp"
+}`
+    : ""
+}
+
 # 3. Management user
 :if ([:len [/user/find name="${rosQuote(router.username)}"]] = 0) do={
     /user/add name="${rosQuote(router.username)}" password="${rosQuote(router.password)}" group=full comment="managed: wg-provision"

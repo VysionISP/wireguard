@@ -47,6 +47,21 @@ const configSchema = z.object({
     serverTunnelIp: z.string().regex(/^\d+\.\d+\.\d+\.\d+$/),
     persistentKeepalive: z.number().int().min(0).default(25),
     /**
+     * MTU of the WireGuard management interface on each router. WireGuard adds
+     * ~60-80 bytes of overhead; if this is too high for the underlying path
+     * (PPPoE 1492, LTE, double-NAT) full-size packets are silently dropped and
+     * large transfers over the tunnel — TLS, git, /tool fetch, big REST/SSH
+     * output — stall while pings still work. 1420 is the RouterOS default;
+     * drop to 1412/1400 on constrained links.
+     */
+    mtu: z.number().int().min(1280).max(1500).default(1420),
+    /**
+     * Also add a TCP MSS clamp (clamp-to-pmtu) for traffic traversing the
+     * management tunnel, so sessions negotiate a size that fits even when a
+     * host behind the router ignores path-MTU discovery. Safe to leave on.
+     */
+    clampMss: z.boolean().default(true),
+    /**
      * "wg"      — apply peers live with the `wg` command (requires root or CAP_NET_ADMIN)
      * "dry-run" — log the commands instead of running them (dev/testing)
      */
